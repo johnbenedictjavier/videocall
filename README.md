@@ -147,13 +147,13 @@ The build uses `HashRouter`, so it is compatible with static GitHub Pages hostin
 
 ## 17. GitHub Pages
 
-The repository includes `.github/workflows/deploy.yml`. Enable GitHub Pages with **GitHub Actions** as the source, then add these repository secrets:
+The repository includes `.github/workflows/deploy.yml`. The current repository also includes the generated `dist` artifact because GitHub Pages may be configured for branch-root hosting. The root page redirects to that artifact when served by GitHub Pages. For a clean Actions-only setup, select **GitHub Actions** as the Pages source and use the uploaded artifact workflow.
 
 - `VITE_SUPABASE_URL`
 - `VITE_SUPABASE_ANON_KEY`
 - `VITE_DAILY_DOMAIN`
 
-Push to `main`. The workflow installs dependencies, builds the Vite app, uploads `dist`, and deploys the static frontend.
+Push to `main`. The workflow installs dependencies, builds the Vite app, and uploads `dist`; branch-based Pages hosting serves the committed artifact fallback.
 
 ## 18. Architecture
 

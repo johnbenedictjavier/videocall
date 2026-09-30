@@ -1,0 +1,306 @@
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
+import { storage } from '../lib/storage'
+import { isSupabaseConfigured, supabase } from '../lib/supabase'
+import { createRemoteConversation, fetchRemoteConversations, fetchRemoteNotifications, fetchRemoteRequests, insertCalculatedMatch, insertMessage, insertMatchRequest as createRemoteRequest, subscribeToConversation, subscribeToUserEvents, updateMatchRequest, uploadChatImage } from '../services/supabaseService'
+import type { Conversation, MatchRequest, Message, NotificationItem, PeerGroupMatch } from '../types'
+import { useAuth } from './AuthContext'
+
+type AppDataContextValue = {
+  conversations: Conversation[]
+  messages: Message[]
+  requests: MatchRequest[]
+  notifications: NotificationItem[]
+  unreadNotifications: number
+  sendMessage: (conversationId: string, content: string) => Promise<Message>
+  sendImageMessage: (conversationId: string, file: File) => Promise<Message>
+  createBuddyRequest: (payload: { recipientId: string; matchId: string; score: number; breakdown?: import('../types').MatchBreakdown }) => Promise<void>
+  updateRequest: (requestId: string, status: 'accepted' | 'declined' | 'skipped') => Promise<void>
+  joinPeerGroup: (group: PeerGroupMatch) => void
+  markConversationRead: (conversationId: string) => void
+  markNotificationRead: (notificationId: string) => void
+  getConversationMessages: (conversationId: string) => Message[]
+  getConversation: (conversationId: string) => Conversation | undefined
+}
+
+const AppDataContext = createContext<AppDataContextValue | null>(null)
+
+const fileToDataUrl = (file: File) => new Promise<string>((resolve, reject) => {
+  const reader = new FileReader()
+  reader.onload = () => resolve(String(reader.result))
+  reader.onerror = () => reject(new Error('Unable to preview that image.'))
+  reader.readAsDataURL(file)
+})
+
+export function AppDataProvider({ children }: { children: ReactNode }) {
+  const { currentUser, isDemo } = useAuth()
+  const remoteEnabled = Boolean(currentUser && isSupabaseConfigured && !isDemo)
+  const [conversations, setConversations] = useState<Conversation[]>(() => storage.getConversations())
+  const [messages, setMessages] = useState<Message[]>(() => storage.getMessages())
+  const [requests, setRequests] = useState<MatchRequest[]>(() => storage.getRequests())
+  const [notifications, setNotifications] = useState<NotificationItem[]>(() => storage.getNotifications())
+
+  const refreshFromStorage = useCallback(() => {
+    setConversations(storage.getConversations())
+    setMessages(storage.getMessages())
+    setRequests(storage.getRequests())
+    setNotifications(storage.getNotifications())
+  }, [])
+
+  useEffect(() => {
+    window.addEventListener('studymatch:data', refreshFromStorage)
+    window.addEventListener('storage', refreshFromStorage)
+    return () => {
+      window.removeEventListener('studymatch:data', refreshFromStorage)
+      window.removeEventListener('storage', refreshFromStorage)
+    }
+  }, [refreshFromStorage])
+
+  useEffect(() => {
+    if (!remoteEnabled || !currentUser) return
+    let active = true
+    void Promise.all([fetchRemoteConversations(currentUser.id), fetchRemoteRequests(currentUser.id), fetchRemoteNotifications(currentUser.id)]).then(([remote, remoteRequests, remoteNotifications]) => {
+      if (!active) return
+      setConversations(remote.conversations)
+      setMessages(remote.messages)
+      setRequests(remoteRequests)
+      setNotifications(remoteNotifications)
+    }).catch(() => undefined)
+    return () => {
+      active = false
+    }
+  }, [currentUser, remoteEnabled])
+
+  const receiveMessage = useCallback((message: Message) => {
+    setMessages((current) => {
+      if (current.some((item) => item.id === message.id)) return current
+      const next = [...current, message]
+      storage.setMessages(next)
+      return next
+    })
+  }, [])
+
+  useEffect(() => {
+    if (!currentUser || !remoteEnabled) return
+    const channels = conversations.map((conversation) => subscribeToConversation(conversation.id, receiveMessage)).filter(Boolean)
+    const userChannel = subscribeToUserEvents(currentUser.id, (payload) => {
+      void fetchRemoteRequests(currentUser.id).then(setRequests).catch(() => undefined)
+      void fetchRemoteNotifications(currentUser.id).then(setNotifications).catch(() => undefined)
+      const eventId = String(payload.id ?? crypto.randomUUID())
+      const notice: NotificationItem = {
+        id: `realtime-${eventId}`,
+        userId: currentUser.id,
+        type: 'message',
+        title: 'New StudyMatch activity',
+        body: 'Your study space just changed.',
+        createdAt: new Date().toISOString(),
+        read: false,
+      }
+      setNotifications((current) => {
+        if (current.some((item) => item.id === notice.id)) return current
+        const next = [notice, ...current]
+        storage.setNotifications(next)
+        return next
+      })
+    })
+    return () => {
+      channels.forEach((channel) => channel?.unsubscribe())
+      userChannel?.unsubscribe()
+    }
+  }, [conversations, currentUser, receiveMessage, refreshFromStorage, remoteEnabled])
+
+  const addMessage = useCallback((message: Message) => {
+    setMessages((current) => {
+      if (current.some((item) => item.id === message.id)) return current
+      const next = [...current, message]
+      storage.setMessages(next)
+      return next
+    })
+    setConversations((current) => {
+      const next = current.map((conversation) => conversation.id === message.conversationId ? {
+        ...conversation,
+        lastMessage: message.kind === 'image' ? 'Sent an image' : message.content,
+        lastMessageAt: message.createdAt,
+      } : conversation)
+      storage.setConversations(next)
+      return next
+    })
+  }, [])
+
+  const sendMessage = useCallback(async (conversationId: string, content: string) => {
+    if (!currentUser) throw new Error('Please sign in first.')
+    const now = new Date().toISOString()
+    if (remoteEnabled && supabase) {
+      const row = await insertMessage({ conversationId, senderId: currentUser.id, content, kind: 'text', createdAt: now, readBy: [currentUser.id] })
+      const message: Message = {
+        id: String(row?.id ?? crypto.randomUUID()),
+        conversationId,
+        senderId: currentUser.id,
+        content,
+        kind: 'text',
+        createdAt: String(row?.created_at ?? now),
+        readBy: [currentUser.id],
+      }
+      addMessage(message)
+      return message
+    }
+    const message: Message = { id: crypto.randomUUID(), conversationId, senderId: currentUser.id, content, kind: 'text', createdAt: now, readBy: [currentUser.id] }
+    addMessage(message)
+    return message
+  }, [addMessage, currentUser, remoteEnabled])
+
+  const sendImageMessage = useCallback(async (conversationId: string, file: File) => {
+    if (!currentUser) throw new Error('Please sign in first.')
+    if (!file.type.startsWith('image/')) throw new Error('Only image files can be shared.')
+    if (file.size > 8 * 1024 * 1024) throw new Error('Images must be smaller than 8MB.')
+    const now = new Date().toISOString()
+    let imageUrl = await fileToDataUrl(file)
+    let imagePath: string | undefined
+    if (remoteEnabled) {
+      const uploaded = await uploadChatImage(file, currentUser.id, conversationId)
+      if (uploaded) {
+        imageUrl = uploaded.url
+        imagePath = uploaded.path
+      }
+    }
+    const payload = { conversationId, senderId: currentUser.id, content: '', kind: 'image' as const, attachmentUrl: imageUrl, attachmentPath: imagePath, attachmentName: file.name, createdAt: now, readBy: [currentUser.id] }
+    if (remoteEnabled && supabase) {
+      const row = await insertMessage(payload)
+      const message: Message = { ...payload, id: String(row?.id ?? crypto.randomUUID()), createdAt: String(row?.created_at ?? now) }
+      addMessage(message)
+      return message
+    }
+    const message: Message = { ...payload, id: crypto.randomUUID() }
+    addMessage(message)
+    return message
+  }, [addMessage, currentUser, remoteEnabled])
+
+  const createBuddyRequest = useCallback(async ({ recipientId, matchId, score, breakdown = { complementarity: score, learningNeedRelevance: score, availability: 0, studyPreference: 0, academicRelevance: 0 } }: { recipientId: string; matchId: string; score: number; breakdown?: import('../types').MatchBreakdown }) => {
+    if (!currentUser) return
+    const now = new Date().toISOString()
+    let persistedMatchId = matchId
+    let remoteRequestId: string | undefined
+    if (remoteEnabled) {
+      const remoteMatch = await insertCalculatedMatch({ createdBy: currentUser.id, memberIds: [currentUser.id, recipientId], mode: 'buddy', score, breakdown })
+      persistedMatchId = String(remoteMatch?.id ?? matchId)
+    }
+    const request: MatchRequest = { id: crypto.randomUUID(), senderId: currentUser.id, recipientId, mode: 'buddy', matchId: persistedMatchId, score, status: 'pending', createdAt: now, updatedAt: now }
+    const next = [...requests.filter((item) => !(item.senderId === currentUser.id && item.recipientId === recipientId && item.status === 'pending')), request]
+    setRequests(next)
+    storage.setRequests(next)
+    if (remoteEnabled) {
+      const remoteRequest = await createRemoteRequest({ senderId: currentUser.id, recipientId, matchId: persistedMatchId, mode: 'buddy', score })
+      remoteRequestId = remoteRequest?.id ? String(remoteRequest.id) : undefined
+      if (remoteRequestId) {
+        const withRemoteId = next.map((item) => item.id === request.id ? { ...item, remoteId: remoteRequestId } : item)
+        setRequests(withRemoteId)
+        storage.setRequests(withRemoteId)
+      }
+    }
+    const recipientNotice: NotificationItem = {
+      id: `request-${request.id}`,
+      userId: recipientId,
+      type: 'request',
+      title: 'New buddy request',
+      body: `${currentUser.fullName} wants to study with you.`,
+      createdAt: now,
+      read: false,
+      actionId: request.id,
+    }
+    const notices = [recipientNotice, ...storage.getNotifications()]
+    setNotifications(notices)
+    storage.setNotifications(notices)
+  }, [currentUser, remoteEnabled, requests])
+
+  const updateRequest = useCallback(async (requestId: string, status: 'accepted' | 'declined' | 'skipped') => {
+    const request = requests.find((item) => item.id === requestId)
+    if (!request || !currentUser) return
+    const updated = { ...request, status, updatedAt: new Date().toISOString() }
+    const nextRequests = requests.map((item) => item.id === requestId ? updated : item)
+    setRequests(nextRequests)
+    storage.setRequests(nextRequests)
+    if (remoteEnabled) await updateMatchRequest(request.remoteId ?? requestId, status)
+    if (status !== 'accepted') return
+    let conversationId = `conversation-${[request.senderId, request.recipientId].sort().join('-')}`
+    if (remoteEnabled) {
+      const remoteConversation = await createRemoteConversation({ type: 'buddy', name: 'Study buddy', memberIds: [request.senderId, request.recipientId], createdBy: currentUser.id, matchId: request.matchId })
+      if (remoteConversation?.id) conversationId = String(remoteConversation.id)
+    }
+    if (!conversations.some((conversation) => conversation.id === conversationId)) {
+      const otherId = request.senderId === currentUser.id ? request.recipientId : request.senderId
+      const conversation: Conversation = { id: conversationId, type: 'buddy', name: 'New study buddy', memberIds: [request.senderId, request.recipientId], unreadCount: 0, online: true }
+      const nextConversations = [...conversations, conversation]
+      setConversations(nextConversations)
+      storage.setConversations(nextConversations)
+      const acceptance: NotificationItem = { id: `accepted-${request.id}`, userId: otherId, type: 'accepted', title: 'Buddy request accepted', body: `${currentUser.fullName} accepted your study request.`, createdAt: new Date().toISOString(), read: false }
+      const nextNotifications = [acceptance, ...storage.getNotifications()]
+      setNotifications(nextNotifications)
+      storage.setNotifications(nextNotifications)
+    }
+  }, [conversations, currentUser, remoteEnabled, requests])
+
+  const markConversationRead = useCallback((conversationId: string) => {
+    setConversations((current) => {
+      const next = current.map((conversation) => conversation.id === conversationId ? { ...conversation, unreadCount: 0 } : conversation)
+      storage.setConversations(next)
+      return next
+    })
+    if (currentUser) {
+      setMessages((current) => {
+        const next = current.map((message) => message.conversationId === conversationId && !message.readBy.includes(currentUser.id) ? { ...message, readBy: [...message.readBy, currentUser.id] } : message)
+        storage.setMessages(next)
+        return next
+      })
+    }
+  }, [currentUser])
+
+  const markNotificationRead = useCallback((notificationId: string) => {
+    setNotifications((current) => {
+      const next = current.map((notification) => notification.id === notificationId ? { ...notification, read: true } : notification)
+      storage.setNotifications(next)
+      return next
+    })
+  }, [])
+
+  const joinPeerGroup = useCallback((group: PeerGroupMatch) => {
+    if (conversations.some((conversation) => conversation.id === group.id)) return
+    const conversation: Conversation = {
+      id: group.id,
+      type: 'peer',
+      name: 'The Study Loop',
+      memberIds: group.members.map((member) => member.id),
+      avatar: group.members.find((member) => member.id !== currentUser?.id)?.avatar,
+      lastMessage: 'Your peer group is ready to learn together.',
+      lastMessageAt: new Date().toISOString(),
+      unreadCount: 0,
+      online: true,
+    }
+    const next = [...conversations, conversation]
+    setConversations(next)
+    storage.setConversations(next)
+  }, [conversations, currentUser])
+
+  const value = useMemo<AppDataContextValue>(() => ({
+    conversations,
+    messages,
+    requests,
+    notifications: currentUser ? notifications.filter((notification) => notification.userId === currentUser.id) : [],
+    unreadNotifications: currentUser ? notifications.filter((notification) => notification.userId === currentUser.id && !notification.read).length : 0,
+    sendMessage,
+    sendImageMessage,
+    createBuddyRequest,
+    updateRequest,
+    joinPeerGroup,
+    markConversationRead,
+    markNotificationRead,
+    getConversationMessages: (conversationId) => messages.filter((message) => message.conversationId === conversationId).sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()),
+    getConversation: (conversationId) => conversations.find((conversation) => conversation.id === conversationId),
+  }), [conversations, createBuddyRequest, joinPeerGroup, markConversationRead, markNotificationRead, messages, notifications, requests, sendImageMessage, sendMessage, updateRequest, currentUser])
+
+  return <AppDataContext.Provider value={value}>{children}</AppDataContext.Provider>
+}
+
+export const useAppData = () => {
+  const context = useContext(AppDataContext)
+  if (!context) throw new Error('useAppData must be used inside AppDataProvider')
+  return context
+}

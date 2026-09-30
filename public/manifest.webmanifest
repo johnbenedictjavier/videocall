@@ -1,0 +1,10 @@
+{
+  "name": "TugmAI StudyMatch",
+  "short_name": "StudyMatch",
+  "description": "Find peers who complement the way you learn.",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#f8faf7",
+  "theme_color": "#2e6b4c",
+  "icons": []
+}

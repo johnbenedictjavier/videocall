@@ -1,0 +1,4 @@
+project_id = "puqnwypfdbzqxykamrvj"
+
+[functions.create-daily-room]
+verify_jwt = true

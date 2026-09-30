@@ -1,0 +1,77 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: 'Manrope', ui-sans-serif, system-ui, sans-serif;
+  color: #17211b;
+  background: #fafbf7;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: 320px;
+  background: #fafbf7;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+}
+
+button,
+input,
+textarea,
+select {
+  font: inherit;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 3px solid rgba(46, 107, 76, 0.25);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: #cfe8d3;
+  color: #173b28;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: #c9d6ca;
+  background-clip: padding-box;
+}
+
+@layer components {
+  .input {
+    @apply w-full rounded-2xl border border-[#dfe8df] bg-white px-3.5 py-3 text-sm text-ink outline-none transition placeholder:text-[#a1aca4] focus:border-moss/50 focus:ring-4 focus:ring-moss/5;
+  }
+
+  .field {
+    @apply block;
+  }
+
+  .field > span {
+    @apply mb-1.5 block text-[11px] font-extrabold text-[#647269];
+  }
+}

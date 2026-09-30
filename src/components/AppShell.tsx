@@ -22,7 +22,7 @@ const navItems = [
 export function AppShell() {
   const { currentUser, isDemo, signOut, switchDemoUser } = useAuth()
   const { notifications, unreadNotifications, requests, updateRequest, markNotificationRead } = useAppData()
-  const { activeCall, incomingCall, acceptCall, declineCall, endCall } = useCalls()
+  const { activeCall, incomingCall, acceptCall, declineCall, endCall, callError, clearCallError } = useCalls()
   const [notificationsOpen, setNotificationsOpen] = useState(false)
   const [demoSwitcherOpen, setDemoSwitcherOpen] = useState(false)
   const location = useLocation()
@@ -51,7 +51,8 @@ export function AppShell() {
     <nav className="fixed inset-x-0 bottom-0 z-30 flex items-end justify-around border-t border-[#e2ebe2] bg-white/95 px-2 pb-[max(10px,env(safe-area-inset-bottom))] pt-2 shadow-[0_-10px_30px_rgba(30,53,38,0.06)] backdrop-blur-xl lg:hidden">{navItems.map(({ to, label, icon: Icon, special }) => <NavLink key={to} to={to} className={({ isActive }) => cn('flex min-w-[56px] flex-col items-center gap-1 text-[10px] font-extrabold transition', special ? '-mt-6' : 'py-1', isActive ? 'text-moss' : 'text-[#93a097]')}><span className={cn('flex items-center justify-center rounded-2xl', special ? 'h-14 w-14 bg-coral text-white shadow-[0_8px_20px_rgba(233,130,97,0.3)]' : 'h-8 w-8')}><Icon size={special ? 23 : 19} strokeWidth={special ? 2.2 : 2.2} /></span><span>{label}</span></NavLink>)}</nav>
 
     {incomingCall && <div className="fixed inset-0 z-[80] flex items-center justify-center bg-[#193424]/55 p-4 backdrop-blur-sm"><div className="w-full max-w-sm rounded-[32px] bg-white p-7 text-center shadow-soft"><div className="mx-auto mb-5 flex h-20 w-20 animate-pulse-soft items-center justify-center rounded-full bg-mint"><Avatar src={incomingCall.caller.avatar} name={incomingCall.caller.fullName} size="xl" online /></div><Pill tone="green">Incoming {incomingCall.kind} call</Pill><h2 className="mt-4 font-display text-2xl font-semibold">{incomingCall.caller.fullName}</h2><p className="mt-2 text-sm text-[#77847b]">Your study buddy is calling from your shared space.</p><div className="mt-7 grid grid-cols-2 gap-3"><Button variant="danger" onClick={declineCall}><PhoneCall size={16} className="rotate-[135deg]" />Decline</Button><Button onClick={acceptCall}><PhoneCall size={16} />Accept</Button></div></div></div>}
-     {activeCall && <CallModal call={activeCall} onClose={endCall} />}
-     <MatchRequestOverlay />
+      {activeCall && <CallModal call={activeCall} onClose={endCall} />}
+      {callError && <div className="fixed bottom-24 left-4 right-4 z-[75] mx-auto flex max-w-md items-start gap-3 rounded-2xl border border-[#f2d0c8] bg-[#fff5f1] p-4 text-xs font-semibold text-[#a8523e] shadow-soft lg:bottom-6 lg:left-auto lg:right-6"><p className="flex-1 leading-5">{callError}</p><IconButton label="Dismiss call error" onClick={clearCallError} className="-mr-1 -mt-1 text-[#a8523e] hover:bg-[#fbe5df]"><X size={15} /></IconButton></div>}
+      <MatchRequestOverlay />
   </div>
 }

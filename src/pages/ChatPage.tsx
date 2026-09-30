@@ -6,10 +6,11 @@ import { useAuth } from '../context/AuthContext'
 import { useAppData } from '../context/AppDataContext'
 import { useCalls } from '../context/CallContext'
 import { useTyping } from '../hooks/useTyping'
+import { fetchRemoteProfile } from '../services/supabaseService'
 import { cn } from '../utils/cn'
 import { formatFullDate, formatTime } from '../utils/format'
 import { Avatar, Button, IconButton, Pill, ReadState } from '../components/ui'
-import type { Message } from '../types'
+import type { Message, UserProfile } from '../types'
 
 const URL_PATTERN = /(https?:\/\/[^\s]+)/g
 
@@ -24,21 +25,39 @@ function MessageBubble({ message, mine, grouped, onImage }: { message: Message; 
 export function ChatPage() {
   const { conversationId } = useParams()
   const navigate = useNavigate()
-  const { currentUser } = useAuth()
+  const { currentUser, isDemo } = useAuth()
   const { getConversation, getConversationMessages, sendMessage, sendImageMessage, markConversationRead } = useAppData()
   const { startCall } = useCalls()
   const [draft, setDraft] = useState('')
   const [sending, setSending] = useState(false)
   const [error, setError] = useState('')
   const [viewer, setViewer] = useState<string | null>(null)
+  const [remoteMembers, setRemoteMembers] = useState<UserProfile[]>([])
   const scrollRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const conversation = conversationId ? getConversation(conversationId) : undefined
   const messages = conversationId ? getConversationMessages(conversationId) : []
   const { typingName, notifyTyping } = useTyping(conversationId, currentUser?.id, currentUser?.fullName)
-  const otherMember = conversation ? demoProfiles.find((profile) => profile.id === conversation.memberIds.find((id) => id !== currentUser?.id)) : undefined
+  useEffect(() => {
+    if (!conversation || isDemo) {
+      setRemoteMembers([])
+      return
+    }
+    let active = true
+    void Promise.all(conversation.memberIds.map((memberId) => fetchRemoteProfile(memberId))).then((profiles) => {
+      if (active) setRemoteMembers(profiles.filter((profile): profile is UserProfile => Boolean(profile)))
+    }).catch(() => {
+      if (active) setRemoteMembers([])
+    })
+    return () => {
+      active = false
+    }
+  }, [conversation?.id, isDemo])
+
+  const memberDirectory = useMemo(() => [...demoProfiles, ...remoteMembers], [remoteMembers])
+  const otherMember = conversation ? memberDirectory.find((profile) => profile.id === conversation.memberIds.find((id) => id !== currentUser?.id)) : undefined
   const displayName = conversation?.type === 'buddy' && otherMember ? otherMember.fullName : conversation?.name
-  const memberProfiles = useMemo(() => conversation?.memberIds.map((id) => demoProfiles.find((profile) => profile.id === id)).filter(Boolean) ?? [], [conversation])
+  const memberProfiles = useMemo(() => conversation?.memberIds.map((id) => memberDirectory.find((profile) => profile.id === id)).filter(Boolean) ?? [], [conversation, memberDirectory])
 
   useEffect(() => {
     if (conversationId) markConversationRead(conversationId)

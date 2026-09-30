@@ -109,7 +109,10 @@ export const fetchRemoteNotifications = async (userId: string) => {
 
 export const sendPasswordReset = async (email: string) => {
   if (!supabase) throw new Error('Password reset is available after Supabase is configured.')
-  const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: window.location.origin })
+  const redirectUrl = new URL('./', window.location.href)
+  redirectUrl.hash = ''
+  redirectUrl.search = ''
+  const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: redirectUrl.toString() })
   if (error) throw error
 }
 
@@ -214,15 +217,24 @@ export const subscribeToUserEvents = (userId: string, onEvent: (payload: Record<
     .subscribe()
 }
 
+export const fetchIncomingCall = async (userId: string) => {
+  if (!supabase) return null
+  const { data, error } = await supabase.from('calls').select('*').contains('recipient_ids', [userId]).eq('status', 'ringing').order('created_at', { ascending: false }).limit(1).maybeSingle()
+  if (error) throw error
+  return data as Record<string, unknown> | null
+}
+
 export const createDailyRoom = async (conversationId: string, kind: 'voice' | 'video', callId?: string) => {
   if (!supabase) return null
   const { data, error } = await supabase.functions.invoke('create-daily-room', { body: { conversationId, kind, callId } })
   if (error) throw error
-  return data as { roomUrl: string; roomName: string; token?: string }
+  if (!data?.roomUrl || !data?.token) throw new Error(data?.error ?? 'The live call room could not be created.')
+  return data as { roomUrl: string; roomName: string; token: string }
 }
 
 export const createCallInvite = async (payload: { conversationId: string; callerId: string; recipientIds: string[]; kind: 'voice' | 'video' }) => {
   if (!supabase) return null
+  if (!payload.recipientIds.length) throw new Error('This study space has no other participants to call.')
   const { data, error } = await supabase.from('calls').insert({
     conversation_id: payload.conversationId,
     caller_id: payload.callerId,
@@ -232,4 +244,10 @@ export const createCallInvite = async (payload: { conversationId: string; caller
   }).select().single()
   if (error) throw error
   return data
+}
+
+export const updateCallStatus = async (callId: string, status: 'declined' | 'ended') => {
+  if (!supabase || !callId) return
+  const { error } = await supabase.from('calls').update({ status, ended_at: new Date().toISOString() }).eq('id', callId)
+  if (error) throw error
 }

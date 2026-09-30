@@ -20,9 +20,11 @@ export function MatchPage() {
   const [preview, setPreview] = useState<UserProfile | null>(null)
   const [joined, setJoined] = useState(false)
   const [remoteProfiles, setRemoteProfiles] = useState<UserProfile[]>([])
+  const [loadingProfiles, setLoadingProfiles] = useState(false)
   useEffect(() => {
     if (!currentUser || isDemo || !isSupabaseConfigured) return
-    void fetchRemoteProfiles(currentUser.id).then(setRemoteProfiles).catch(() => setRemoteProfiles([]))
+    setLoadingProfiles(true)
+    void fetchRemoteProfiles(currentUser.id).then(setRemoteProfiles).catch(() => setRemoteProfiles([])).finally(() => setLoadingProfiles(false))
   }, [currentUser, isDemo])
   const profiles = isDemo ? demoProfiles : remoteProfiles
   const buddyMatches = useMemo(() => currentUser ? findBuddyMatches(currentUser, profiles).filter((match) => !skipped.includes(match.profile.id)) : [], [currentUser, profiles, skipped])
@@ -32,8 +34,11 @@ export function MatchPage() {
     if (peerGroup) setJoined(conversations.some((conversation) => conversation.id === peerGroup.id))
   }, [conversations, peerGroup])
 
-  if (!currentUser || !peerGroup) return null
+  if (!currentUser) return null
+  if (loadingProfiles) return <div className="rounded-[28px] border border-[#e4ece4] bg-white px-6 py-16 text-center shadow-card"><p className="font-display text-lg font-semibold">Finding your study connections...</p><p className="mt-2 text-sm text-[#7e8b82]">We are loading profiles from your connected workspace.</p></div>
   const topMatch = buddyMatches[0]
+  if (!topMatch) return <div className="rounded-[28px] border border-[#e4ece4] bg-white px-6 py-16 text-center shadow-card"><div className="mx-auto max-w-md"><p className="font-display text-lg font-semibold">No other learners yet</p><p className="mt-2 text-sm leading-6 text-[#7e8b82]">Invite another student to create an account. Once they join, they will appear here and you can open a private voice or video space.</p><Link to="/profile" className="mt-5 inline-flex rounded-xl bg-moss px-4 py-2.5 text-xs font-extrabold text-white">Complete your profile</Link></div></div>
+  if (!peerGroup) return null
   const currentRequest = topMatch && requests.find((request) => request.senderId === currentUser.id && request.recipientId === topMatch.profile.id && request.status === 'pending')
 
   const startSearch = () => {

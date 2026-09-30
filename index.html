@@ -17,7 +17,7 @@
     <script>
       if (location.hostname.endsWith('github.io') && document.querySelector('script[src="/src/main.tsx"]')) {
         const base = location.pathname.endsWith('/') ? location.pathname : `${location.pathname}/`
-        location.replace(`${base}dist/`)
+        location.replace(`${base}dist/${location.search}${location.hash}`)
       }
     </script>
   </body>

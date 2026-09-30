@@ -55,20 +55,22 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     }
   }, [refreshFromStorage])
 
-  useEffect(() => {
+  const refreshRemoteData = useCallback(async () => {
     if (!remoteEnabled || !currentUser) return
-    let active = true
-    void Promise.all([fetchRemoteConversations(currentUser.id), fetchRemoteRequests(currentUser.id), fetchRemoteNotifications(currentUser.id)]).then(([remote, remoteRequests, remoteNotifications]) => {
-      if (!active) return
-      setConversations(remote.conversations)
-      setMessages(remote.messages)
-      setRequests(remoteRequests)
-      setNotifications(remoteNotifications)
-    }).catch(() => undefined)
-    return () => {
-      active = false
-    }
+    const [remote, remoteRequests, remoteNotifications] = await Promise.all([
+      fetchRemoteConversations(currentUser.id),
+      fetchRemoteRequests(currentUser.id),
+      fetchRemoteNotifications(currentUser.id),
+    ])
+    setConversations(remote.conversations)
+    setMessages(remote.messages)
+    setRequests(remoteRequests)
+    setNotifications(remoteNotifications)
   }, [currentUser, remoteEnabled])
+
+  useEffect(() => {
+    void refreshRemoteData().catch(() => undefined)
+  }, [refreshRemoteData])
 
   const receiveMessage = useCallback((message: Message) => {
     setMessages((current) => {
@@ -83,8 +85,10 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     if (!currentUser || !remoteEnabled) return
     const channels = conversations.map((conversation) => subscribeToConversation(conversation.id, receiveMessage)).filter(Boolean)
     const userChannel = subscribeToUserEvents(currentUser.id, (payload) => {
-      void fetchRemoteRequests(currentUser.id).then(setRequests).catch(() => undefined)
-      void fetchRemoteNotifications(currentUser.id).then(setNotifications).catch(() => undefined)
+      void refreshRemoteData().catch(() => undefined)
+      // Acceptance creates the conversation immediately after the request update.
+      // A second read lets the sender see it even if Realtime delivers those events out of order.
+      window.setTimeout(() => void refreshRemoteData().catch(() => undefined), 800)
       const eventId = String(payload.id ?? crypto.randomUUID())
       const notice: NotificationItem = {
         id: `realtime-${eventId}`,
@@ -106,7 +110,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       channels.forEach((channel) => channel?.unsubscribe())
       userChannel?.unsubscribe()
     }
-  }, [conversations, currentUser, receiveMessage, refreshFromStorage, remoteEnabled])
+  }, [conversations, currentUser, receiveMessage, refreshRemoteData, remoteEnabled])
 
   const addMessage = useCallback((message: Message) => {
     setMessages((current) => {

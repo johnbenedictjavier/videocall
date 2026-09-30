@@ -35,7 +35,7 @@ With the Supabase CLI:
 
 ```bash
 npx supabase login
-npx supabase link --project-ref puqnwypfdbzqxykamrvj.supabase.co
+npx supabase link --project-ref puqnwypfdbzqxykamrvj
 npx supabase db push
 ```
 
@@ -43,7 +43,7 @@ The migration creates profiles, skills, user skills, matches, match requests, pe
 
 ## 4. Authentication
 
-In Supabase Authentication, configure the site URL and redirect URLs for local development and the GitHub Pages URL. Email/password authentication is used by the app. The migration adds an `auth.users` trigger that creates a matching `profiles` row.
+In Supabase Authentication, configure the site URL and redirect URLs for local development and `https://johnbenedictjavier.github.io/videocall/`. If Pages is still serving the committed fallback artifact, also allow `https://johnbenedictjavier.github.io/videocall/dist/`. Email/password authentication is used by the app. The migration adds an `auth.users` trigger that creates a matching `profiles` row.
 
 The signup metadata fields are passed into the profile trigger. Profile editing updates only the authenticated user's own row.
 
@@ -70,11 +70,12 @@ The secure Edge Function creates one private Daily room per call invite, creates
 Set the function secrets:
 
 ```bash
-npx supabase secrets set DAILY_API_KEY=your_daily_api_key DAILY_DOMAIN=your-domain.daily.co SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
-npx supabase functions deploy create-daily-room
+npx supabase secrets set --project-ref puqnwypfdbzqxykamrvj DAILY_API_KEY=your_daily_api_key DAILY_DOMAIN=your-domain.daily.co SUPABASE_SERVICE_ROLE_KEY=your_service_role_key
+npx supabase functions deploy create-daily-room --project-ref puqnwypfdbzqxykamrvj
 ```
 
 The service-role key is only used inside the Edge Function to persist room details. Never commit it or expose it through Vite.
+The repository also includes `.github/workflows/deploy-supabase-function.yml`; add a `SUPABASE_ACCESS_TOKEN` repository secret to deploy this function automatically when its source changes. Daily and service-role values stay in Supabase Function Secrets.
 
 ## 9. Environment Variables
 
@@ -83,7 +84,6 @@ Copy `.env.example` to `.env.local`:
 ```env
 VITE_SUPABASE_URL=https://puqnwypfdbzqxykamrvj.supabase.co
 VITE_SUPABASE_ANON_KEY=your_supabase_publishable_key
-VITE_DAILY_DOMAIN=your-domain.daily.co
 VITE_BASE_PATH=./
 ```
 
@@ -131,7 +131,7 @@ Select the paperclip button, choose a PNG, JPEG, WebP, or GIF smaller than 8MB, 
 
 ## 15. Voice and Video Test
 
-Use the phone or camera button in a conversation. Without Daily credentials the app opens an integrated demo room with working controls and elapsed time. With the Edge Function deployed, both participants receive the same private Daily room and can use microphone, camera, screen sharing, participant grid, and leave controls.
+Use the phone or camera button in a conversation. Demo Login still opens a local simulated room for product exploration. Authenticated users must have the Edge Function and Daily secrets configured; they receive the same private Daily room with separate user tokens and can use microphone, camera, screen sharing, participant grid, and leave controls. A production configuration error is shown instead of a fake room.
 
 To test incoming calls, open the same conversation in two demo tabs, switch personas, and start a call from one tab. The other tab receives an incoming-call overlay through `BroadcastChannel`. Supabase mode uses the `calls` Realtime table.
 
@@ -147,13 +147,11 @@ The build uses `HashRouter`, so it is compatible with static GitHub Pages hostin
 
 ## 17. GitHub Pages
 
-The repository includes `.github/workflows/deploy.yml`. The current repository also includes the generated `dist` artifact because GitHub Pages may be configured for branch-root hosting. The root page redirects to that artifact when served by GitHub Pages. For a clean Actions-only setup, select **GitHub Actions** as the Pages source and use the uploaded artifact workflow.
+The repository includes `.github/workflows/deploy.yml`, which builds and deploys the artifact through GitHub Actions. In repository Settings > Pages, select **GitHub Actions** as the source. The root page still redirects to a committed `dist` artifact when Pages is configured for branch-root hosting.
 
 - `VITE_SUPABASE_URL`
 - `VITE_SUPABASE_ANON_KEY`
-- `VITE_DAILY_DOMAIN`
-
-Push to `main`. The workflow installs dependencies, builds the Vite app, and uploads `dist`; branch-based Pages hosting serves the committed artifact fallback.
+Push to `main`. The workflow installs dependencies, builds the Vite app, and deploys `dist`. Branch-based Pages hosting requires the generated artifact fallback to be committed as well.
 
 ## 18. Architecture
 

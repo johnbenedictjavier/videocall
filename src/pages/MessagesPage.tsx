@@ -1,18 +1,39 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { ArrowRight, MessageCircle, Search, UsersRound } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { demoProfiles } from '../data/demoData'
+import { demoProfiles as staticProfiles } from '../data/demoData'
 import { useAuth } from '../context/AuthContext'
 import { useAppData } from '../context/AppDataContext'
+import { fetchRemoteProfile } from '../services/supabaseService'
 import { cn } from '../utils/cn'
 import { formatRelativeTime } from '../utils/format'
 import { Avatar, EmptyState, Pill, SectionTitle } from '../components/ui'
+import type { UserProfile } from '../types'
 
 export function MessagesPage() {
-  const { currentUser } = useAuth()
+  const { currentUser, isDemo } = useAuth()
   const { conversations } = useAppData()
   const [filter, setFilter] = useState<'all' | 'buddy' | 'peer'>('all')
   const [query, setQuery] = useState('')
+  const [remoteMembers, setRemoteMembers] = useState<UserProfile[]>([])
+  useEffect(() => {
+    if (isDemo) {
+      setRemoteMembers([])
+      return
+    }
+    let active = true
+    const memberIds = [...new Set(conversations.flatMap((conversation) => conversation.memberIds))]
+    void Promise.all(memberIds.map((memberId) => fetchRemoteProfile(memberId))).then((profiles) => {
+      if (active) setRemoteMembers(profiles.filter((profile): profile is UserProfile => Boolean(profile)))
+    }).catch(() => {
+      if (active) setRemoteMembers([])
+    })
+    return () => {
+      active = false
+    }
+  }, [conversations, isDemo])
+
+  const demoProfiles = useMemo(() => [...staticProfiles, ...remoteMembers], [remoteMembers])
   if (!currentUser) return null
   const visible = useMemo(() => conversations.filter((conversation) => (filter === 'all' || conversation.type === filter) && conversation.name.toLowerCase().includes(query.toLowerCase())), [conversations, filter, query])
 

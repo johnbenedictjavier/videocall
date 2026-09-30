@@ -1,19 +1,28 @@
+import { useEffect, useState } from 'react'
 import { ArrowRight, BookOpen, CalendarDays, CheckCircle2, Clock3, MessageCircle, Play, Sparkles, UsersRound } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { demoProfiles } from '../data/demoData'
+import { demoProfiles as staticProfiles } from '../data/demoData'
 import { findBuddyMatches } from '../features/matching/matching'
 import { useAuth } from '../context/AuthContext'
 import { useAppData } from '../context/AppDataContext'
+import { fetchRemoteProfiles } from '../services/supabaseService'
+import { isSupabaseConfigured } from '../lib/supabase'
 import { formatAvailability, formatRelativeTime } from '../utils/format'
 import { Avatar, Button, Pill, ProgressBar, ScoreRing, SectionTitle } from '../components/ui'
 
 export function DashboardPage() {
-  const { currentUser } = useAuth()
+  const { currentUser, isDemo } = useAuth()
   const { conversations } = useAppData()
+  const [remoteProfiles, setRemoteProfiles] = useState<import('../types').UserProfile[]>([])
+  useEffect(() => {
+    if (!currentUser || isDemo || !isSupabaseConfigured) return
+    void fetchRemoteProfiles(currentUser.id).then(setRemoteProfiles).catch(() => setRemoteProfiles([]))
+  }, [currentUser, isDemo])
   if (!currentUser) return null
 
-  const topMatch = findBuddyMatches(currentUser, demoProfiles)[0]
+  const topMatch = findBuddyMatches(currentUser, isDemo ? staticProfiles : remoteProfiles)[0]
   const weeklyProgress = Math.min(100, currentUser.stats.learningHours / 60 * 100)
+  if (!topMatch) return <div className="rounded-[28px] border border-[#e4ece4] bg-white px-6 py-16 text-center shadow-card"><p className="font-display text-xl font-semibold">Your study space is ready</p><p className="mx-auto mt-2 max-w-md text-sm leading-6 text-[#7e8b82]">Invite another learner to join StudyMatch. When they create an account, they will appear in Match and you can start a private call from your shared conversation.</p><Link to="/match" className="mt-5 inline-flex rounded-xl bg-moss px-4 py-2.5 text-xs font-extrabold text-white">Find a study buddy</Link></div>
 
   return (
     <div className="space-y-8">

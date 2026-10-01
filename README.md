@@ -29,7 +29,7 @@ The configured project URL is:
 https://puqnwypfdbzqxykamrvj.supabase.co
 ```
 
-Create or use that project, then run the migration in `supabase/migrations/20260930000000_studymatch.sql`.
+Create or use that project, then apply all migrations in `supabase/migrations/`.
 
 With the Supabase CLI:
 
@@ -40,6 +40,8 @@ npx supabase db push
 ```
 
 The migrations create profiles, skills, user skills, matches, match requests, peer groups, conversations, members, messages, message reads, notifications, calls, call participants, random queue and encounter tables, rule acceptances, blocks, reports, indexes, triggers, Realtime publication entries, Storage buckets, and RLS policies.
+
+The messaging reliability migration also consolidates existing duplicate one-to-one conversations, preserves their messages, and adds secure history clearing and read-receipt RPCs.
 
 ## 4. Authentication
 

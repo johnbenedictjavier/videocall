@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { storage } from '../lib/storage'
 import { isSupabaseConfigured, supabase } from '../lib/supabase'
-import { createRemoteConversation, fetchRemoteConversations, fetchRemoteNotifications, fetchRemoteRequests, insertCalculatedMatch, insertMessage, insertMatchRequest as createRemoteRequest, subscribeToConversation, subscribeToUserEvents, updateMatchRequest, uploadChatImage } from '../services/supabaseService'
+import { clearRemoteConversationHistory, createRemoteConversation, fetchRemoteConversations, fetchRemoteNotifications, fetchRemoteRequests, insertCalculatedMatch, insertMessage, insertMatchRequest as createRemoteRequest, markRemoteConversationRead, markRemoteNotificationRead, subscribeToConversation, subscribeToUserEvents, updateMatchRequest, uploadChatImage } from '../services/supabaseService'
 import type { Conversation, MatchRequest, Message, NotificationItem, PeerGroupMatch } from '../types'
 import { useAuth } from './AuthContext'
 
@@ -17,6 +17,7 @@ type AppDataContextValue = {
   updateRequest: (requestId: string, status: 'accepted' | 'declined' | 'skipped') => Promise<void>
   joinPeerGroup: (group: PeerGroupMatch) => void
   markConversationRead: (conversationId: string) => void
+  clearConversationHistory: (conversationId: string) => Promise<void>
   markNotificationRead: (notificationId: string) => void
   refreshData: () => Promise<void>
   getConversationMessages: (conversationId: string) => Message[]
@@ -41,11 +42,23 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
   const [notifications, setNotifications] = useState<NotificationItem[]>(() => storage.getNotifications())
 
   const refreshFromStorage = useCallback(() => {
+    if (remoteEnabled) return
     setConversations(storage.getConversations())
     setMessages(storage.getMessages())
     setRequests(storage.getRequests())
     setNotifications(storage.getNotifications())
-  }, [])
+  }, [remoteEnabled])
+
+  useEffect(() => {
+    if (remoteEnabled) {
+      setConversations([])
+      setMessages([])
+      setRequests([])
+      setNotifications([])
+    } else {
+      refreshFromStorage()
+    }
+  }, [currentUser?.id, refreshFromStorage, remoteEnabled])
 
   useEffect(() => {
     window.addEventListener('studymatch:data', refreshFromStorage)
@@ -77,47 +90,43 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     setMessages((current) => {
       if (current.some((item) => item.id === message.id)) return current
       const next = [...current, message]
-      storage.setMessages(next)
+      if (!remoteEnabled) storage.setMessages(next)
       return next
     })
-  }, [])
+    setConversations((current) => {
+      const next = current.map((conversation) => conversation.id === message.conversationId ? {
+        ...conversation,
+        lastMessage: message.kind === 'image' ? 'Shared an image' : message.content,
+        lastMessageAt: message.createdAt,
+        unreadCount: message.senderId === currentUser?.id ? conversation.unreadCount : conversation.unreadCount + 1,
+      } : conversation)
+      if (!remoteEnabled) storage.setConversations(next)
+      return next
+    })
+  }, [currentUser?.id, remoteEnabled])
+
+  const conversationIds = useMemo(() => conversations.map((conversation) => conversation.id).sort().join(','), [conversations])
 
   useEffect(() => {
     if (!currentUser || !remoteEnabled) return
-    const channels = conversations.map((conversation) => subscribeToConversation(conversation.id, receiveMessage)).filter(Boolean)
-    const userChannel = subscribeToUserEvents(currentUser.id, (payload) => {
+    const channels = conversationIds.split(',').filter(Boolean).map((conversationId) => subscribeToConversation(conversationId, receiveMessage)).filter(Boolean)
+    const userChannel = subscribeToUserEvents(currentUser.id, () => {
       void refreshRemoteData().catch(() => undefined)
       // Acceptance creates the conversation immediately after the request update.
       // A second read lets the sender see it even if Realtime delivers those events out of order.
       window.setTimeout(() => void refreshRemoteData().catch(() => undefined), 800)
-      const eventId = String(payload.id ?? crypto.randomUUID())
-      const notice: NotificationItem = {
-        id: `realtime-${eventId}`,
-        userId: currentUser.id,
-        type: 'message',
-        title: 'New StudyMatch activity',
-        body: 'Your study space just changed.',
-        createdAt: new Date().toISOString(),
-        read: false,
-      }
-      setNotifications((current) => {
-        if (current.some((item) => item.id === notice.id)) return current
-        const next = [notice, ...current]
-        storage.setNotifications(next)
-        return next
-      })
     })
     return () => {
       channels.forEach((channel) => channel?.unsubscribe())
       userChannel?.unsubscribe()
     }
-  }, [conversations, currentUser, receiveMessage, refreshRemoteData, remoteEnabled])
+  }, [conversationIds, currentUser, receiveMessage, refreshRemoteData, remoteEnabled])
 
   const addMessage = useCallback((message: Message) => {
     setMessages((current) => {
       if (current.some((item) => item.id === message.id)) return current
       const next = [...current, message]
-      storage.setMessages(next)
+      if (!remoteEnabled) storage.setMessages(next)
       return next
     })
     setConversations((current) => {
@@ -126,10 +135,10 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
         lastMessage: message.kind === 'image' ? 'Sent an image' : message.content,
         lastMessageAt: message.createdAt,
       } : conversation)
-      storage.setConversations(next)
+      if (!remoteEnabled) storage.setConversations(next)
       return next
     })
-  }, [])
+  }, [remoteEnabled])
 
   const sendMessage = useCallback(async (conversationId: string, content: string) => {
     if (!currentUser) throw new Error('Please sign in first.')
@@ -246,25 +255,41 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
   const markConversationRead = useCallback((conversationId: string) => {
     setConversations((current) => {
       const next = current.map((conversation) => conversation.id === conversationId ? { ...conversation, unreadCount: 0 } : conversation)
-      storage.setConversations(next)
+      if (!remoteEnabled) storage.setConversations(next)
       return next
     })
     if (currentUser) {
       setMessages((current) => {
         const next = current.map((message) => message.conversationId === conversationId && !message.readBy.includes(currentUser.id) ? { ...message, readBy: [...message.readBy, currentUser.id] } : message)
-        storage.setMessages(next)
+        if (!remoteEnabled) storage.setMessages(next)
         return next
       })
     }
-  }, [currentUser])
+    if (remoteEnabled) void markRemoteConversationRead(conversationId).catch(() => undefined)
+  }, [currentUser, remoteEnabled])
+
+  const clearConversationHistory = useCallback(async (conversationId: string) => {
+    if (remoteEnabled) await clearRemoteConversationHistory(conversationId)
+    setMessages((current) => {
+      const next = current.filter((message) => message.conversationId !== conversationId)
+      if (!remoteEnabled) storage.setMessages(next)
+      return next
+    })
+    setConversations((current) => {
+      const next = current.map((conversation) => conversation.id === conversationId ? { ...conversation, lastMessage: undefined, lastMessageAt: undefined, unreadCount: 0 } : conversation)
+      if (!remoteEnabled) storage.setConversations(next)
+      return next
+    })
+  }, [remoteEnabled])
 
   const markNotificationRead = useCallback((notificationId: string) => {
     setNotifications((current) => {
       const next = current.map((notification) => notification.id === notificationId ? { ...notification, read: true } : notification)
-      storage.setNotifications(next)
+      if (!remoteEnabled) storage.setNotifications(next)
       return next
     })
-  }, [])
+    if (remoteEnabled && currentUser) void markRemoteNotificationRead(notificationId, currentUser.id).catch(() => undefined)
+  }, [currentUser, remoteEnabled])
 
   const joinPeerGroup = useCallback((group: PeerGroupMatch) => {
     if (conversations.some((conversation) => conversation.id === group.id)) return
@@ -296,11 +321,12 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     updateRequest,
     joinPeerGroup,
     markConversationRead,
+    clearConversationHistory,
     markNotificationRead,
     refreshData: refreshRemoteData,
     getConversationMessages: (conversationId) => messages.filter((message) => message.conversationId === conversationId).sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()),
     getConversation: (conversationId) => conversations.find((conversation) => conversation.id === conversationId),
-  }), [conversations, createBuddyRequest, joinPeerGroup, markConversationRead, markNotificationRead, messages, notifications, requests, sendImageMessage, sendMessage, updateRequest, currentUser, refreshRemoteData])
+  }), [clearConversationHistory, conversations, createBuddyRequest, joinPeerGroup, markConversationRead, markNotificationRead, messages, notifications, requests, sendImageMessage, sendMessage, updateRequest, currentUser, refreshRemoteData])
 
   return <AppDataContext.Provider value={value}>{children}</AppDataContext.Provider>
 }

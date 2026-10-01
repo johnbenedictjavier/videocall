@@ -66,9 +66,9 @@ export const fetchRemoteProfiles = async (excludeId?: string) => {
 
 export const fetchRemoteConversations = async (userId: string) => {
   if (!supabase) return { conversations: [], messages: [] as Message[] }
-  const { data: rows, error } = await supabase.from('conversations').select('id, type, name, avatar_path, conversation_members(user_id)').order('updated_at', { ascending: false })
+  const { data: rows, error } = await supabase.from('conversations').select('id, type, name, avatar_path, conversation_members(user_id, last_read_at, history_cleared_at)').order('updated_at', { ascending: false })
   if (error) throw error
-  const conversations = (rows ?? []).map((row) => ({
+  const baseConversations = (rows ?? []).map((row) => ({
     id: String(row.id),
     type: row.type as 'buddy' | 'peer',
     name: String(row.name ?? 'Study space'),
@@ -76,20 +76,36 @@ export const fetchRemoteConversations = async (userId: string) => {
     avatar: row.avatar_path ? String(row.avatar_path) : undefined,
     unreadCount: 0,
     online: true,
+    members: row.conversation_members ?? [],
   })).filter((conversation) => conversation.memberIds.includes(userId))
-  const ids = conversations.map((conversation) => conversation.id)
-  if (!ids.length) return { conversations, messages: [] as Message[] }
-  const { data: messageRows, error: messageError } = await supabase.from('messages').select('*').in('conversation_id', ids).order('created_at', { ascending: true })
+  const ids = baseConversations.map((conversation) => conversation.id)
+  if (!ids.length) return { conversations: [], messages: [] as Message[] }
+  const { data: messageRows, error: messageError } = await supabase.from('messages').select('*, message_reads(user_id)').in('conversation_id', ids).order('created_at', { ascending: true })
   if (messageError) throw messageError
-  const messages: Message[] = await Promise.all((messageRows ?? []).map(async (row) => {
+  const visibleRows = (messageRows ?? []).filter((row) => {
+    const conversation = baseConversations.find((item) => item.id === String(row.conversation_id))
+    const member = conversation?.members.find((item: { user_id: string }) => item.user_id === userId)
+    return !member?.history_cleared_at || new Date(String(row.created_at)).getTime() > new Date(String(member.history_cleared_at)).getTime()
+  })
+  const messages: Message[] = await Promise.all(visibleRows.map(async (row) => {
     const attachmentPath = row.attachment_path ? String(row.attachment_path) : undefined
     let attachmentUrl: string | undefined
     if (attachmentPath && supabase) {
       const signed = await supabase.storage.from('chat-images').createSignedUrl(attachmentPath, 60 * 60)
       attachmentUrl = signed.data?.signedUrl
     }
-    return { id: String(row.id), conversationId: String(row.conversation_id), senderId: String(row.sender_id), content: String(row.content ?? ''), kind: row.message_type as Message['kind'], attachmentPath, attachmentUrl, attachmentName: row.attachment_name ? String(row.attachment_name) : undefined, createdAt: String(row.created_at), readBy: [] }
+    return { id: String(row.id), conversationId: String(row.conversation_id), senderId: String(row.sender_id), content: String(row.content ?? ''), kind: row.message_type as Message['kind'], attachmentPath, attachmentUrl, attachmentName: row.attachment_name ? String(row.attachment_name) : undefined, createdAt: String(row.created_at), readBy: Array.isArray(row.message_reads) ? row.message_reads.map((read: { user_id: string }) => String(read.user_id)) : [] }
   }))
+  const conversations = baseConversations.map(({ members: _members, ...conversation }) => {
+    const conversationMessages = messages.filter((message) => message.conversationId === conversation.id)
+    const latest = conversationMessages[conversationMessages.length - 1]
+    return {
+      ...conversation,
+      lastMessage: latest ? latest.kind === 'image' ? 'Shared an image' : latest.content : undefined,
+      lastMessageAt: latest?.createdAt,
+      unreadCount: conversationMessages.filter((message) => message.senderId !== userId && !message.readBy.includes(userId)).length,
+    }
+  })
   return { conversations, messages }
 }
 
@@ -124,6 +140,7 @@ export const insertMessage = async (message: Omit<Message, 'id'>) => {
     content: message.content,
     message_type: message.kind,
     attachment_path: message.attachmentPath ?? message.attachmentUrl ?? null,
+    attachment_name: message.attachmentName ?? null,
     created_at: message.createdAt,
   }).select().single()
   if (error) throw error
@@ -167,6 +184,13 @@ export const updateMatchRequest = async (id: string, status: 'accepted' | 'decli
 
 export const createRemoteConversation = async (payload: { type: 'buddy' | 'peer'; name: string; memberIds: string[]; createdBy: string; matchId?: string }) => {
   if (!supabase) return null
+  if (payload.type === 'buddy' && payload.memberIds.length === 2) {
+    const otherUserId = payload.memberIds.find((memberId) => memberId !== payload.createdBy)
+    if (!otherUserId) throw new Error('A direct conversation needs another participant.')
+    const { data, error } = await supabase.rpc('get_or_create_direct_conversation', { p_other_user_id: otherUserId, p_name: payload.name })
+    if (error) throw error
+    return data ? { id: String(data) } : null
+  }
   const { data: conversation, error } = await supabase.from('conversations').insert({ type: payload.type, name: payload.name, created_by: payload.createdBy, match_id: payload.matchId ?? null }).select('id').single()
   if (error) throw error
   const { error: membersError } = await supabase.from('conversation_members').insert(payload.memberIds.map((userId) => ({ conversation_id: conversation.id, user_id: userId })))
@@ -188,33 +212,78 @@ export const uploadChatImage = async (file: File, userId: string, conversationId
 
 export const subscribeToConversation = (conversationId: string, callback: (message: Message) => void): RealtimeChannel | null => {
   if (!supabase) return null
-  return supabase
+  const client = supabase
+  return client
     .channel(`conversation:${conversationId}`)
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `conversation_id=eq.${conversationId}` }, (payload) => {
       const row = payload.new as Record<string, unknown>
-      callback({
-        id: String(row.id),
-        conversationId: String(row.conversation_id),
-        senderId: String(row.sender_id),
-        content: String(row.content ?? ''),
-        kind: (row.message_type as Message['kind']) ?? 'text',
-        attachmentUrl: row.attachment_path ? String(row.attachment_path) : undefined,
-        createdAt: String(row.created_at),
-        readBy: [],
-      })
+      void (async () => {
+        const attachmentPath = row.attachment_path ? String(row.attachment_path) : undefined
+        let attachmentUrl: string | undefined
+        if (attachmentPath) {
+          const signed = await client.storage.from('chat-images').createSignedUrl(attachmentPath, 60 * 60)
+          attachmentUrl = signed.data?.signedUrl
+        }
+        callback({
+          id: String(row.id),
+          conversationId: String(row.conversation_id),
+          senderId: String(row.sender_id),
+          content: String(row.content ?? ''),
+          kind: (row.message_type as Message['kind']) ?? 'text',
+          attachmentPath,
+          attachmentUrl,
+          attachmentName: row.attachment_name ? String(row.attachment_name) : undefined,
+          createdAt: String(row.created_at),
+          readBy: [],
+        })
+      })()
     })
     .subscribe()
 }
 
-export const subscribeToUserEvents = (userId: string, onEvent: (payload: Record<string, unknown>) => void): RealtimeChannel | null => {
+export const subscribeToUserEvents = (userId: string, onEvent: (payload: Record<string, unknown>, meta?: { table: string; event: string }) => void): RealtimeChannel | null => {
   if (!supabase) return null
+  const emit = (payload: Record<string, unknown>, table: string, event: string) => onEvent(payload, { table, event })
   return supabase
     .channel(`user-events:${userId}:${crypto.randomUUID()}`)
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'match_requests', filter: `recipient_id=eq.${userId}` }, (payload) => onEvent(payload.new as Record<string, unknown>))
-    .on('postgres_changes', { event: '*', schema: 'public', table: 'match_requests', filter: `sender_id=eq.${userId}` }, (payload) => onEvent(payload.new as Record<string, unknown>))
-    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${userId}` }, (payload) => onEvent(payload.new as Record<string, unknown>))
-    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'calls' }, (payload) => onEvent(payload.new as Record<string, unknown>))
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'match_requests', filter: `recipient_id=eq.${userId}` }, (payload) => emit((payload.new ?? payload.old) as Record<string, unknown>, 'match_requests', 'CHANGE'))
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'match_requests', filter: `sender_id=eq.${userId}` }, (payload) => emit((payload.new ?? payload.old) as Record<string, unknown>, 'match_requests', 'CHANGE'))
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${userId}` }, (payload) => emit(payload.new as Record<string, unknown>, 'notifications', 'INSERT'))
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'calls' }, (payload) => emit(payload.new as Record<string, unknown>, 'calls', 'INSERT'))
     .subscribe()
+}
+
+export const markRemoteNotificationRead = async (notificationId: string, userId: string) => {
+  if (!supabase) return
+  const { error } = await supabase.from('notifications').update({ read: true }).eq('id', notificationId).eq('user_id', userId)
+  if (error) throw error
+}
+
+export const markRemoteConversationRead = async (conversationId: string) => {
+  if (!supabase) return
+  const { error } = await supabase.rpc('mark_conversation_read', { p_conversation_id: conversationId })
+  if (error) throw error
+}
+
+export const clearRemoteConversationHistory = async (conversationId: string) => {
+  if (!supabase) return
+  const { error } = await supabase.rpc('clear_conversation_history', { p_conversation_id: conversationId })
+  if (error) throw error
+}
+
+const getFunctionErrorMessage = async (error: unknown) => {
+  const context = (error as { context?: unknown } | null)?.context
+  if (context instanceof Response) {
+    const status = context.status ? ` (${context.status})` : ''
+    try {
+      const body = await context.clone().json() as { error?: string; message?: string }
+      if (body.error || body.message) return `${body.error ?? body.message}${status}`
+    } catch {
+      // Keep the SDK message when the function did not return JSON.
+    }
+    return `The call service returned an error${status}.`
+  }
+  return error instanceof Error ? error.message : 'The call service could not be reached.'
 }
 
 export const fetchIncomingCall = async (userId: string) => {
@@ -227,7 +296,7 @@ export const fetchIncomingCall = async (userId: string) => {
 export const createDailyRoom = async (conversationId: string, kind: 'voice' | 'video', callId?: string) => {
   if (!supabase) return null
   const { data, error } = await supabase.functions.invoke('create-daily-room', { body: { conversationId, kind, callId } })
-  if (error) throw error
+  if (error) throw new Error(await getFunctionErrorMessage(error))
   if (!data?.roomUrl || !data?.token) throw new Error(data?.error ?? 'The live call room could not be created.')
   return data as { roomUrl: string; roomName: string; token: string }
 }
@@ -322,7 +391,7 @@ export const reportRandomUser = async (userId: string, reportedUserId: string, e
 export const createDailyEncounterRoom = async (encounterId: string, kind: CallKind) => {
   if (!supabase) return null
   const { data, error } = await supabase.functions.invoke('create-daily-room', { body: { encounterId, kind } })
-  if (error) throw error
+  if (error) throw new Error(await getFunctionErrorMessage(error))
   if (!data?.roomUrl || !data?.token) throw new Error(data?.error ?? 'The live encounter room could not be created.')
   return data as { roomUrl: string; roomName: string; token: string }
 }

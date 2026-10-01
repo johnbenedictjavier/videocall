@@ -11,6 +11,17 @@ type RandomEncounterRecord = { id: string; participant_ids: string[]; kind: 'voi
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
 
+const dailyFailure = async (response: Response, fallback: string, status: number) => {
+  let detail = ''
+  try {
+    const body = await response.clone().json() as { error?: string; info?: string; message?: string }
+    detail = body.error ?? body.info ?? body.message ?? ''
+  } catch {
+    // Daily may return an empty or non-JSON response for upstream failures.
+  }
+  return json({ error: detail ? `${fallback} ${detail}` : fallback }, status)
+}
+
 Deno.serve(async (request) => {
   if (request.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
 
@@ -86,10 +97,10 @@ Deno.serve(async (request) => {
         room = await roomResponse.json() as { url?: string }
       } else if (roomResponse.status === 409) {
         const existingResponse = await fetch(`https://api.daily.co/v1/rooms/${encodeURIComponent(roomName)}`, { headers: { Authorization: `Bearer ${dailyApiKey}` } })
-        if (!existingResponse.ok) return json({ error: 'Daily could not load the existing call room.' }, 502)
+        if (!existingResponse.ok) return dailyFailure(existingResponse, 'Daily could not load the existing call room.', 502)
         room = await existingResponse.json() as { url?: string }
       } else {
-        return json({ error: 'Daily could not create the call room.' }, 502)
+        return dailyFailure(roomResponse, 'Daily could not create the call room.', 502)
       }
 
       roomUrl = room.url || `https://${dailyDomain}/${roomName}`
@@ -105,7 +116,7 @@ Deno.serve(async (request) => {
       headers: { Authorization: `Bearer ${dailyApiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ properties: { room_name: roomName, user_id: authData.user.id, user_name: authData.user.user_metadata?.full_name ?? authData.user.email, exp: Math.floor(Date.now() / 1000) + 60 * 60 * 8 } }),
     })
-    if (!tokenResponse.ok) return json({ error: 'Daily could not create a meeting token.' }, 502)
+    if (!tokenResponse.ok) return dailyFailure(tokenResponse, 'Daily could not create a meeting token.', 502)
     const token = await tokenResponse.json() as { token?: string }
     if (!token.token) return json({ error: 'Daily returned an empty meeting token.' }, 502)
 

@@ -5,6 +5,7 @@ export function useTyping(conversationId: string | undefined, userId: string | u
   const [typingName, setTypingName] = useState<string | null>(null)
   const timeoutRef = useRef<number | undefined>(undefined)
   const channelRef = useRef<BroadcastChannel | null>(null)
+  const realtimeChannelRef = useRef<any>(null)
 
   useEffect(() => {
     if (!conversationId || !userId) return
@@ -28,11 +29,13 @@ export function useTyping(conversationId: string | undefined, userId: string | u
           timeoutRef.current = window.setTimeout(() => setTypingName(null), 1800)
         })
         .subscribe()
+      realtimeChannelRef.current = realtimeChannel
     }
     return () => {
       if (timeoutRef.current) window.clearTimeout(timeoutRef.current)
       channelRef.current?.close()
       channelRef.current = null
+      realtimeChannelRef.current = null
       realtimeChannel?.unsubscribe()
     }
   }, [conversationId, userId])
@@ -40,7 +43,7 @@ export function useTyping(conversationId: string | undefined, userId: string | u
   const notifyTyping = () => {
     const payload = { userId, userName }
     channelRef.current?.postMessage(payload)
-    if (supabase && conversationId) void supabase.channel(`typing:${conversationId}`).send({ type: 'broadcast', event: 'typing', payload })
+    if (supabase && conversationId) void realtimeChannelRef.current?.send({ type: 'broadcast', event: 'typing', payload })
   }
 
   return { typingName, notifyTyping }

@@ -12,9 +12,9 @@ import { CallModal } from './CallModal'
 import { MatchRequestOverlay } from './MatchRequestOverlay'
 
 const navItems = [
-  { to: '/', label: 'Home', icon: Home },
+  { to: '/dashboard', label: 'Home', icon: Home },
   { to: '/skillgps', label: 'SkillGPS', icon: Map },
-  { to: '/match', label: 'Match', icon: Sparkles, special: true },
+  { to: '/match', label: 'Meet', icon: Sparkles, special: true },
   { to: '/messages', label: 'Messages', icon: MessageCircle },
   { to: '/profile', label: 'Profile', icon: UserRound },
 ]
@@ -29,11 +29,11 @@ export function AppShell() {
 
   if (!currentUser) return null
 
-  const title = location.pathname.startsWith('/skillgps') ? 'Your learning profile' : location.pathname.startsWith('/match') ? 'Find your people' : location.pathname.startsWith('/messages') ? 'Study spaces' : location.pathname.startsWith('/profile') ? 'Your profile' : 'Good to see you'
+  const title = location.pathname.startsWith('/skillgps') ? 'Your learning profile' : location.pathname.startsWith('/match') ? 'Meet someone new' : location.pathname.startsWith('/messages') ? 'Study spaces' : location.pathname.startsWith('/profile') ? 'Your profile' : 'Good to see you'
 
   return <div className="min-h-screen bg-cream text-ink">
     <aside className="fixed inset-y-0 left-0 z-30 hidden w-[252px] flex-col border-r border-[#e7eee7] bg-[#fbfcf9] px-5 py-6 lg:flex">
-      <div className="flex items-center gap-3 px-3"><div className="flex h-10 w-10 items-center justify-center rounded-[14px] bg-moss text-white shadow-[0_8px_18px_rgba(46,107,76,0.18)]"><Sparkles size={20} fill="currentColor" /></div><div><div className="font-display text-[17px] font-bold tracking-[-0.05em]">TugmAI</div><div className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-[#8a988f]">StudyMatch</div></div></div>
+       <div className="flex items-center gap-3 px-3"><div className="flex h-10 w-10 items-center justify-center rounded-[14px] bg-moss text-white shadow-[0_8px_18px_rgba(46,107,76,0.18)]"><Sparkles size={20} fill="currentColor" /></div><div><div className="font-display text-[17px] font-bold tracking-[-0.05em]">TugmAI</div><div className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-[#8a988f]">Random Meet</div></div></div>
       <div className="mt-10 px-3 text-[10px] font-extrabold uppercase tracking-[0.2em] text-[#9aa69d]">Your space</div>
       <nav className="mt-3 flex flex-col gap-1">
         {navItems.map(({ to, label, icon: Icon, special }) => <NavLink key={to} to={to} className={({ isActive }) => cn('group flex items-center gap-3 rounded-2xl px-3 py-3 text-sm font-bold transition', isActive ? 'bg-mint text-moss' : 'text-[#758178] hover:bg-mist hover:text-ink', special && 'mt-2')}><span className={cn('flex h-8 w-8 items-center justify-center rounded-xl', special ? 'bg-coral text-white shadow-[0_6px_16px_rgba(233,130,97,0.26)]' : 'bg-transparent')}><Icon size={special ? 17 : 18} strokeWidth={special ? 2.4 : 2} /></span>{label}{label === 'Messages' && <span className="ml-auto h-5 min-w-5 rounded-full bg-coral px-1.5 text-center text-[10px] leading-5 text-white">2</span>}</NavLink>)}

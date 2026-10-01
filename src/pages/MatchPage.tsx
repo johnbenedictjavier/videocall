@@ -1,60 +1,214 @@
-import { useEffect, useMemo, useState } from 'react'
-import { ArrowRight, BookOpen, Check, ChevronDown, Clock3, Database, Filter, GraduationCap, HeartHandshake, Info, MessageCircle, Search, Sparkles, UsersRound, X } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { Camera, Check, Loader2, MessageCircle, ShieldCheck, SkipForward, Users, Video, Volume2, X } from 'lucide-react'
 import { Link } from 'react-router-dom'
-import { demoProfiles } from '../data/demoData'
-import { findBestPeerGroup, findBuddyMatches } from '../features/matching/matching'
+import { CallModal } from '../components/CallModal'
+import { Button, Pill } from '../components/ui'
 import { useAuth } from '../context/AuthContext'
 import { useAppData } from '../context/AppDataContext'
-import { fetchRemoteProfiles } from '../services/supabaseService'
 import { isSupabaseConfigured } from '../lib/supabase'
-import { formatAvailability } from '../utils/format'
-import { Avatar, Button, Pill, ScoreRing, SectionTitle } from '../components/ui'
-import type { UserProfile } from '../types'
+import { acceptRandomRules, blockRandomUser, fetchRandomEncounter, finishRandomEncounter, hasAcceptedRandomRules, joinRandomQueue, leaveRandomQueue, reportRandomUser } from '../services/supabaseService'
+import type { CallKind, RandomEncounter } from '../types'
+
+type QueueState = 'checking' | 'rules' | 'waiting' | 'matched' | 'error' | 'demo'
+
+const RULES_VERSION = 'random-meet-v1'
 
 export function MatchPage() {
   const { currentUser, isDemo } = useAuth()
-  const { requests, createBuddyRequest, updateRequest, conversations, joinPeerGroup } = useAppData()
-  const [mode, setMode] = useState<'buddy' | 'peer'>('buddy')
-  const [searching, setSearching] = useState(false)
-  const [skipped, setSkipped] = useState<string[]>([])
-  const [preview, setPreview] = useState<UserProfile | null>(null)
-  const [joined, setJoined] = useState(false)
-  const [remoteProfiles, setRemoteProfiles] = useState<UserProfile[]>([])
-  const [loadingProfiles, setLoadingProfiles] = useState(false)
-  useEffect(() => {
-    if (!currentUser || isDemo || !isSupabaseConfigured) return
-    setLoadingProfiles(true)
-    void fetchRemoteProfiles(currentUser.id).then(setRemoteProfiles).catch(() => setRemoteProfiles([])).finally(() => setLoadingProfiles(false))
-  }, [currentUser, isDemo])
-  const profiles = isDemo ? demoProfiles : remoteProfiles
-  const buddyMatches = useMemo(() => currentUser ? findBuddyMatches(currentUser, profiles).filter((match) => !skipped.includes(match.profile.id)) : [], [currentUser, profiles, skipped])
-  const peerGroup = useMemo(() => currentUser ? findBestPeerGroup(currentUser, profiles) : null, [currentUser, profiles])
+  const { refreshData } = useAppData()
+  const userId = currentUser?.id
+  const [kind, setKind] = useState<CallKind>('video')
+  const [queueState, setQueueState] = useState<QueueState>('checking')
+  const [encounter, setEncounter] = useState<RandomEncounter | null>(null)
+  const [rulesOpen, setRulesOpen] = useState(false)
+  const [acceptingRules, setAcceptingRules] = useState(false)
+  const [error, setError] = useState('')
+  const [lastConversationId, setLastConversationId] = useState<string | null>(null)
+  const pollingRef = useRef<number | null>(null)
+  const requestRef = useRef(false)
+  const encounterRef = useRef<RandomEncounter | null>(null)
+  const mountedRef = useRef(true)
+
+  const stopPolling = useCallback(() => {
+    if (pollingRef.current !== null) {
+      window.clearInterval(pollingRef.current)
+      pollingRef.current = null
+    }
+  }, [])
+
+  const queueNow = useCallback(async () => {
+    if (!userId || isDemo || requestRef.current) return
+    requestRef.current = true
+    setError('')
+    try {
+      const found = await joinRandomQueue(kind)
+      if (!mountedRef.current) return
+      if (found) {
+        encounterRef.current = found
+        setEncounter(found)
+        setQueueState('matched')
+        stopPolling()
+        void refreshData().catch(() => undefined)
+      } else {
+        setQueueState('waiting')
+        if (pollingRef.current === null) pollingRef.current = window.setInterval(() => void queueNow(), 3500)
+      }
+    } catch (queueError) {
+      if (!mountedRef.current) return
+      setQueueState('error')
+      setError(queueError instanceof Error ? queueError.message : 'Random matching is not available right now.')
+      stopPolling()
+    } finally {
+      requestRef.current = false
+    }
+  }, [isDemo, kind, refreshData, stopPolling, userId])
 
   useEffect(() => {
-    if (peerGroup) setJoined(conversations.some((conversation) => conversation.id === peerGroup.id))
-  }, [conversations, peerGroup])
+    mountedRef.current = true
+    if (!userId) return () => undefined
+    if (isDemo || !isSupabaseConfigured) {
+      setQueueState('demo')
+      return () => undefined
+    }
+
+    let cancelled = false
+    const prepare = async () => {
+      setQueueState('checking')
+      try {
+        const accepted = await hasAcceptedRandomRules(userId, RULES_VERSION)
+        if (cancelled || !mountedRef.current) return
+        if (!accepted) {
+          setQueueState('rules')
+          setRulesOpen(true)
+          return
+        }
+        await queueNow()
+      } catch (prepareError) {
+        if (!cancelled && mountedRef.current) {
+          setQueueState('error')
+          setError(prepareError instanceof Error ? prepareError.message : 'Unable to prepare random matching.')
+        }
+      }
+    }
+    void prepare()
+
+    return () => {
+      cancelled = true
+      stopPolling()
+      requestRef.current = false
+      void leaveRandomQueue().catch(() => undefined)
+    }
+  }, [isDemo, kind, queueNow, stopPolling, userId])
+
+  useEffect(() => () => {
+    mountedRef.current = false
+  }, [])
+
+  useEffect(() => {
+    if (!encounter || !userId) return () => undefined
+    const timer = window.setInterval(async () => {
+      try {
+        const current = await fetchRandomEncounter(userId)
+        if (current?.id === encounter.id || !mountedRef.current) return
+        encounterRef.current = null
+        setEncounter(null)
+        setQueueState('waiting')
+        await queueNow()
+      } catch {
+        // A temporary read failure should not interrupt a live room.
+      }
+    }, 3500)
+    return () => window.clearInterval(timer)
+  }, [encounter, queueNow, userId])
+
+  const acceptRulesAndStart = async () => {
+    if (!userId) return
+    setAcceptingRules(true)
+    setError('')
+    try {
+      await acceptRandomRules(userId, RULES_VERSION)
+      setRulesOpen(false)
+      await queueNow()
+    } catch (acceptError) {
+      setError(acceptError instanceof Error ? acceptError.message : 'The rules could not be saved.')
+    } finally {
+      setAcceptingRules(false)
+    }
+  }
+
+  const finishEncounter = async (status: 'ended' | 'skipped' = 'skipped') => {
+    const current = encounterRef.current
+    if (!current) return
+    encounterRef.current = null
+    setEncounter(null)
+    setLastConversationId(current.conversationId ?? null)
+    setQueueState('waiting')
+    stopPolling()
+    await finishRandomEncounter(current.id, status).catch(() => undefined)
+    await queueNow()
+  }
+
+  const chooseKind = (nextKind: CallKind) => {
+    if (queueState === 'matched') return
+    setKind(nextKind)
+  }
+
+  const blockAndLeave = async () => {
+    const current = encounterRef.current
+    const otherUserId = current?.participantIds.find((participantId) => participantId !== userId)
+    if (current && userId && otherUserId) await blockRandomUser(userId, otherUserId)
+    await finishEncounter('ended')
+  }
+
+  const reportAndLeave = async (reason: string) => {
+    const current = encounterRef.current
+    const otherUserId = current?.participantIds.find((participantId) => participantId !== userId)
+    if (current && userId && otherUserId) await reportRandomUser(userId, otherUserId, current.id, reason)
+    await finishEncounter('ended')
+  }
 
   if (!currentUser) return null
-  if (loadingProfiles) return <div className="rounded-[28px] border border-[#e4ece4] bg-white px-6 py-16 text-center shadow-card"><p className="font-display text-lg font-semibold">Finding your study connections...</p><p className="mt-2 text-sm text-[#7e8b82]">We are loading profiles from your connected workspace.</p></div>
-  const topMatch = buddyMatches[0]
-  if (!topMatch) return <div className="rounded-[28px] border border-[#e4ece4] bg-white px-6 py-16 text-center shadow-card"><div className="mx-auto max-w-md"><p className="font-display text-lg font-semibold">No other learners yet</p><p className="mt-2 text-sm leading-6 text-[#7e8b82]">Invite another student to create an account. Once they join, they will appear here and you can open a private voice or video space.</p><Link to="/profile" className="mt-5 inline-flex rounded-xl bg-moss px-4 py-2.5 text-xs font-extrabold text-white">Complete your profile</Link></div></div>
-  if (!peerGroup) return null
-  const currentRequest = topMatch && requests.find((request) => request.senderId === currentUser.id && request.recipientId === topMatch.profile.id && request.status === 'pending')
 
-  const startSearch = () => {
-    setSearching(true)
-    window.setTimeout(() => setSearching(false), 950)
-  }
+  const waiting = queueState === 'checking' || queueState === 'waiting'
+  const stateLabel = queueState === 'checking' ? 'Checking your access' : queueState === 'waiting' ? 'Waiting for a person' : queueState === 'matched' ? 'Match found' : queueState === 'demo' ? 'Demo mode' : queueState === 'rules' ? 'Rules first' : 'Matching unavailable'
 
-  const sendRequest = async () => {
-    if (!topMatch) return
-    await createBuddyRequest({ recipientId: topMatch.profile.id, matchId: topMatch.id, score: topMatch.score, breakdown: topMatch.breakdown })
-  }
+  return <div className="space-y-7">
+    <section className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between">
+      <div>
+        <p className="text-sm text-[#758178]">Random, one-to-one conversations</p>
+        <h1 className="mt-1 font-display text-3xl font-semibold tracking-[-0.055em] sm:text-4xl">Meet someone new</h1>
+        <p className="mt-3 max-w-xl text-sm leading-6 text-[#78857c]">You will be paired automatically with the next available adult. No requests, profiles, or awkward introductions.</p>
+      </div>
+      <div className="flex rounded-2xl bg-mist p-1">
+        <button onClick={() => chooseKind('video')} disabled={queueState === 'matched'} className={`flex items-center gap-2 rounded-xl px-3 py-2.5 text-xs font-extrabold transition sm:px-4 ${kind === 'video' ? 'bg-white text-ink shadow-sm' : 'text-[#829087]'}`}><Video size={15} />Video</button>
+        <button onClick={() => chooseKind('voice')} disabled={queueState === 'matched'} className={`flex items-center gap-2 rounded-xl px-3 py-2.5 text-xs font-extrabold transition sm:px-4 ${kind === 'voice' ? 'bg-white text-ink shadow-sm' : 'text-[#829087]'}`}><Volume2 size={15} />Voice</button>
+      </div>
+    </section>
 
-  return <div className="space-y-8"><div className="flex flex-col gap-5 sm:flex-row sm:items-end sm:justify-between"><div><p className="text-sm text-[#758178]">Complementary, not identical</p><h1 className="mt-1 font-display text-3xl font-semibold tracking-[-0.055em] sm:text-4xl">Find your people</h1><p className="mt-3 max-w-xl text-sm leading-6 text-[#78857c]">StudyMatch looks for the useful overlap between what you can teach and what someone else needs next.</p></div><div className="flex rounded-2xl bg-mist p-1"><button onClick={() => setMode('buddy')} className={`flex items-center gap-2 rounded-xl px-3 py-2.5 text-xs font-extrabold transition sm:px-4 ${mode === 'buddy' ? 'bg-white text-ink shadow-sm' : 'text-[#829087]'}`}><HeartHandshake size={15} />Buddy</button><button onClick={() => setMode('peer')} className={`flex items-center gap-2 rounded-xl px-3 py-2.5 text-xs font-extrabold transition sm:px-4 ${mode === 'peer' ? 'bg-white text-ink shadow-sm' : 'text-[#829087]'}`}><UsersRound size={15} />Peer group</button></div></div>
+    <section className="grid gap-7 xl:grid-cols-[1.2fr_0.8fr]">
+      <div className="relative min-h-[470px] overflow-hidden rounded-[32px] bg-[#193b2a] p-6 text-white shadow-soft sm:p-9">
+        <div className="absolute -right-24 -top-24 h-72 w-72 rounded-full border-[42px] border-white/[0.06]" />
+        <div className="absolute -bottom-28 -left-20 h-64 w-64 rounded-full border-[34px] border-[#8fd3a0]/[0.08]" />
+        <div className="relative flex h-full flex-col">
+          <div className="flex items-center justify-between gap-3"><Pill className="bg-white/10 text-[#d0ebd6]"><span className="h-1.5 w-1.5 rounded-full bg-[#7ce39b]" />{stateLabel}</Pill><span className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-white/45">{kind} room</span></div>
+          <div className="flex flex-1 flex-col items-center justify-center text-center">
+            {waiting && <><div className="flex h-28 w-28 items-center justify-center rounded-full border border-white/10 bg-white/[0.08]"><Users size={42} className="text-[#bde7c6]" /></div><h2 className="mt-7 font-display text-3xl font-semibold tracking-[-0.05em]">{queueState === 'checking' ? 'Getting things ready...' : 'Looking for someone...'}</h2><p className="mt-3 max-w-sm text-sm leading-6 text-white/60">Keep this page open. When another person is ready, your private room will open automatically.</p><Loader2 className="mt-7 animate-spin text-[#9ee1ad]" size={24} /> </>}
+            {queueState === 'rules' && <><div className="flex h-28 w-28 items-center justify-center rounded-full border border-white/10 bg-white/[0.08]"><ShieldCheck size={45} className="text-[#bde7c6]" /></div><h2 className="mt-7 font-display text-3xl font-semibold tracking-[-0.05em]">A safe start matters</h2><p className="mt-3 max-w-sm text-sm leading-6 text-white/60">Review the community rules before random matching begins.</p><Button onClick={() => setRulesOpen(true)} className="mt-7 bg-white text-[#193b2a] hover:bg-[#edf8ef]">Review rules</Button></>}
+            {queueState === 'matched' && <><div className="flex h-28 w-28 items-center justify-center rounded-full bg-[#8fd3a0]/20"><Camera size={42} className="text-[#bde7c6]" /></div><h2 className="mt-7 font-display text-3xl font-semibold tracking-[-0.05em]">Connecting you now</h2><p className="mt-3 max-w-sm text-sm leading-6 text-white/60">Your private {kind} room is opening. Keep camera and microphone permissions ready.</p></>}
+            {queueState === 'demo' && <><div className="flex h-28 w-28 items-center justify-center rounded-full border border-white/10 bg-white/[0.08]"><Users size={42} className="text-[#bde7c6]" /></div><h2 className="mt-7 font-display text-3xl font-semibold tracking-[-0.05em]">Real account required</h2><p className="mt-3 max-w-sm text-sm leading-6 text-white/60">Demo Login is stored on one browser. Sign in with a Supabase account to match with a different phone.</p></>}
+            {queueState === 'error' && <><div className="flex h-28 w-28 items-center justify-center rounded-full border border-[#f2a08f]/20 bg-[#f2a08f]/10"><X size={42} className="text-[#ffb3a5]" /></div><h2 className="mt-7 font-display text-3xl font-semibold tracking-[-0.05em]">Could not start matching</h2><p className="mt-3 max-w-lg text-sm leading-6 text-white/60">{error}</p><Button onClick={() => void queueNow()} className="mt-7 bg-white text-[#193b2a] hover:bg-[#edf8ef]">Try again</Button></>}
+          </div>
+          <div className="flex items-center justify-center gap-2 text-[11px] font-semibold text-white/45"><ShieldCheck size={14} />You can leave, skip, or report at any time.</div>
+        </div>
+      </div>
 
-    {mode === 'buddy' ? <section className="grid gap-8 xl:grid-cols-[0.78fr_1.22fr]"><div className="relative overflow-hidden rounded-[30px] bg-[#234c36] p-6 text-white shadow-soft sm:p-8"><div className="absolute -right-16 -top-16 h-56 w-56 rounded-full border-[35px] border-white/[0.06]" /><div className="relative"><Pill className="bg-white/10 text-[#cbe8ce]">Two-way learning</Pill><h2 className="mt-5 font-display text-3xl font-semibold leading-tight tracking-[-0.05em]">A study buddy should make both of you stronger.</h2><p className="mt-4 text-sm leading-6 text-white/65">We weigh bidirectional skill coverage, availability, study style, and academic relevance. No random percentages.</p><div className="mt-8 space-y-3"><div className="flex items-center gap-3 rounded-2xl bg-white/10 p-3"><div className="flex h-8 w-8 items-center justify-center rounded-xl bg-white/10"><Database size={15} /></div><div><p className="text-xs font-extrabold">Strength to weakness</p><p className="text-[11px] text-white/50">45% of the score</p></div></div><div className="flex items-center gap-3 rounded-2xl bg-white/10 p-3"><div className="flex h-8 w-8 items-center justify-center rounded-xl bg-white/10"><Clock3 size={15} /></div><div><p className="text-xs font-extrabold">Time you can both show up</p><p className="text-[11px] text-white/50">15% of the score</p></div></div><div className="flex items-center gap-3 rounded-2xl bg-white/10 p-3"><div className="flex h-8 w-8 items-center justify-center rounded-xl bg-white/10"><GraduationCap size={15} /></div><div><p className="text-xs font-extrabold">Learning context</p><p className="text-[11px] text-white/50">15% of the score</p></div></div></div></div></div><div><div className="mb-4 flex items-center justify-between"><div><p className="text-[10px] font-extrabold uppercase tracking-[0.18em] text-moss">Buddy mode</p><h2 className="mt-1 font-display text-xl font-semibold tracking-[-0.04em]">Your strongest connection</h2></div><Button variant="secondary" size="sm" onClick={startSearch} disabled={searching}><Search size={14} />{searching ? 'Searching...' : 'Find a Buddy'}</Button></div>{searching ? <div className="flex min-h-[420px] flex-col items-center justify-center rounded-[28px] border border-[#e4ece4] bg-white p-8 text-center shadow-card"><div className="relative flex h-24 w-24 items-center justify-center rounded-full bg-mint"><div className="absolute inset-0 animate-ping rounded-full border border-[#82bd8e]" /><Sparkles className="animate-pulse text-moss" size={30} /></div><h3 className="mt-7 font-display text-xl font-semibold">Finding someone who complements you...</h3><p className="mt-2 max-w-xs text-sm leading-6 text-[#7b887f]">Comparing strengths, learning gaps, schedules, and study styles.</p><div className="mt-6 flex gap-1.5"><span className="h-1.5 w-1.5 animate-bounce rounded-full bg-moss [animation-delay:-0.3s]" /><span className="h-1.5 w-1.5 animate-bounce rounded-full bg-moss [animation-delay:-0.15s]" /><span className="h-1.5 w-1.5 animate-bounce rounded-full bg-moss" /></div></div> : topMatch ? <div className="rounded-[28px] border border-[#e4ece4] bg-white p-5 shadow-card sm:p-6"><div className="flex flex-col gap-5 sm:flex-row sm:items-start"><ScoreRing score={topMatch.score} size="lg" /><div className="min-w-0 flex-1"><div className="flex flex-wrap items-center gap-2"><h3 className="font-display text-2xl font-semibold tracking-[-0.05em]">{topMatch.profile.fullName}</h3><span className="h-2 w-2 rounded-full bg-[#55b97e]" /></div><p className="mt-1 text-xs text-[#839087]">{topMatch.profile.course} · {topMatch.profile.yearLevel} · {topMatch.profile.school}</p><p className="mt-4 text-sm leading-6 text-[#69766e]">{topMatch.profile.bio}</p></div><Avatar src={topMatch.profile.avatar} name={topMatch.profile.fullName} size="lg" online={topMatch.profile.online} /></div><div className="my-6 grid gap-3 sm:grid-cols-2"><div className="rounded-2xl bg-mint p-4"><p className="text-[10px] font-extrabold uppercase tracking-[0.15em] text-moss">Can help you with</p><div className="mt-3 flex flex-wrap gap-2">{topMatch.needsHelp.length ? topMatch.needsHelp.map((skill) => <span key={skill.name} className="rounded-lg bg-white/80 px-2 py-1 text-xs font-bold text-moss">{skill.name}</span>) : <span className="text-xs text-[#6f8375]">Their strengths fit your gaps.</span>}</div></div><div className="rounded-2xl bg-[#fff5e5] p-4"><p className="text-[10px] font-extrabold uppercase tracking-[0.15em] text-[#a76b27]">You can help with</p><div className="mt-3 flex flex-wrap gap-2">{topMatch.canHelp.length ? topMatch.canHelp.map((skill) => <span key={skill.name} className="rounded-lg bg-white/80 px-2 py-1 text-xs font-bold text-[#a76b27]">{skill.name}</span>) : <span className="text-xs text-[#93754d]">Your strengths can support them.</span>}</div></div></div><div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-[#edf2ed] pb-5 text-xs font-semibold text-[#7e8b82]"><span className="flex items-center gap-1.5"><Clock3 size={14} className="text-moss" />{formatAvailability(topMatch.sharedAvailability)}</span><span className="flex items-center gap-1.5"><BookOpen size={14} className="text-moss" />{topMatch.profile.preferredStudyMode}</span></div><div className="mt-5 flex flex-wrap gap-2"><Button variant="secondary" onClick={() => setPreview(topMatch.profile)}>View Profile <ArrowRight size={15} /></Button>{currentRequest ? <Button variant="soft" disabled><Check size={15} />Request sent</Button> : <Button onClick={() => void sendRequest()}><HeartHandshake size={15} />Connect</Button>}<Button variant="ghost" onClick={() => { setSkipped((items) => [...items, topMatch.profile.id]); updateRequest(currentRequest?.id ?? '', 'skipped').catch(() => undefined) }}>Skip</Button></div><details className="mt-5 group"><summary className="flex cursor-pointer list-none items-center gap-2 text-[11px] font-extrabold text-[#849188]"><Info size={13} />How we got {topMatch.score}% <ChevronDown size={13} className="transition group-open:rotate-180" /></summary><div className="mt-3 grid grid-cols-2 gap-x-5 gap-y-3 rounded-2xl bg-cream p-4 sm:grid-cols-5">{Object.entries(topMatch.breakdown).map(([label, value]) => <div key={label}><p className="text-[9px] font-extrabold uppercase leading-4 tracking-wide text-[#99a39c]">{label.replace(/([A-Z])/g, ' $1')}</p><p className="mt-1 font-display text-base font-semibold">{value}%</p></div>)}</div></details></div> : <div className="flex min-h-[420px] items-center justify-center rounded-[28px] border border-dashed border-[#dce6dc] bg-white"><p className="text-sm text-[#7b887f]">No more matches right now.</p></div>}</div></section> : <section className="grid gap-8 xl:grid-cols-[0.75fr_1.25fr]"><div className="rounded-[30px] border border-[#e4ece4] bg-white p-6 shadow-card sm:p-8"><div className="flex items-center justify-between"><Pill tone="green">Peer mode</Pill><div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-mint text-moss"><UsersRound size={21} /></div></div><h2 className="mt-6 font-display text-3xl font-semibold leading-tight tracking-[-0.05em]">The best group fills each other's gaps.</h2><p className="mt-4 text-sm leading-6 text-[#77847b]">This group is built from coverage across members. Shared subjects alone never make the cut.</p><div className="mt-8 space-y-4"><div className="flex gap-3"><span className="mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-mint text-moss"><Check size={12} strokeWidth={3} /></span><p className="text-xs leading-5 text-[#718077]"><strong className="text-ink">3+ students</strong> with a useful learning loop.</p></div><div className="flex gap-3"><span className="mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-mint text-moss"><Check size={12} strokeWidth={3} /></span><p className="text-xs leading-5 text-[#718077"><strong className="text-ink">Combined strengths</strong> cover the group's needs.</p></div><div className="flex gap-3"><span className="mt-1 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-mint text-moss"><Check size={12} strokeWidth={3} /></span><p className="text-xs leading-5 text-[#718077]">A shared schedule keeps the group alive.</p></div></div></div><div className="rounded-[30px] border border-[#e4ece4] bg-white p-5 shadow-card sm:p-7"><div className="flex flex-wrap items-center justify-between gap-3"><div><Pill tone="green">Calculated group</Pill><h2 className="mt-3 font-display text-2xl font-semibold tracking-[-0.05em]">The Study Loop</h2><p className="mt-1 text-xs text-[#849188]">{peerGroup.members.length} students · recommended topic: {peerGroup.recommendedTopic}</p></div><ScoreRing score={peerGroup.score} /></div><div className="mt-6 space-y-2">{peerGroup.members.map((member) => <div key={member.id} className="flex items-center gap-3 rounded-2xl bg-cream p-3"><Avatar src={member.avatar} name={member.fullName} size="sm" online={member.online} /><div className="min-w-0 flex-1"><div className="flex items-center gap-2"><p className="truncate text-xs font-extrabold">{member.id === currentUser.id ? `${member.fullName} (you)` : member.fullName}</p>{member.id === currentUser.id && <Pill tone="green" className="!px-1.5 !py-0.5 !text-[8px]">You</Pill>}</div><p className="mt-1 truncate text-[11px] text-[#7e8b82]">Strong in {member.strengths.slice(0, 2).map((skill) => skill.name).join(' · ')}</p></div><span className="text-xs font-display font-semibold text-moss">{member.strengths[0]?.proficiency}%</span></div>)}</div><div className="mt-5 grid gap-3 sm:grid-cols-2"><div className="rounded-2xl bg-mint p-4"><p className="text-[10px] font-extrabold uppercase tracking-[0.15em] text-moss">Group strengths</p><p className="mt-2 text-xs font-bold leading-5 text-[#4f7159]">{peerGroup.strengths.join(' · ')}</p></div><div className="rounded-2xl bg-[#fff5e5] p-4"><p className="text-[10px] font-extrabold uppercase tracking-[0.15em] text-[#a76b27]">Shared learning goals</p><p className="mt-2 text-xs font-bold leading-5 text-[#93754d]">{peerGroup.learningGoals.join(' · ')}</p></div></div><div className="mt-5 flex items-center justify-between gap-3 border-t border-[#edf2ed] pt-4"><span className="flex items-center gap-1.5 text-xs font-semibold text-[#7e8b82]"><Clock3 size={14} className="text-moss" />{formatAvailability(peerGroup.sharedAvailability)}</span><Button disabled={joined} onClick={() => { joinPeerGroup(peerGroup); setJoined(true) }}>{joined ? <><Check size={15} />Joined</> : <>Join Peer Group <ArrowRight size={15} /></>}</Button></div></div></section>}
+      <aside className="space-y-5">
+        <div className="rounded-[28px] border border-[#e3ece3] bg-white p-6 shadow-card"><div className="flex items-center gap-3"><div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-mint text-moss"><ShieldCheck size={19} /></div><div><p className="font-display text-base font-semibold">Random meet rules</p><p className="text-[11px] text-[#87938b]">Adults 18+ only</p></div></div><ul className="mt-5 space-y-3 text-xs leading-5 text-[#647269]"><li className="flex gap-2"><Check size={15} className="mt-0.5 shrink-0 text-moss" />Be respectful and get consent before sharing personal information.</li><li className="flex gap-2"><Check size={15} className="mt-0.5 shrink-0 text-moss" />No nudity, sexual content, threats, hate, scams, or illegal activity.</li><li className="flex gap-2"><Check size={15} className="mt-0.5 shrink-0 text-moss" />Use Block, Report, or Next if anything feels unsafe.</li></ul><button onClick={() => setRulesOpen(true)} className="mt-5 text-xs font-extrabold text-moss underline underline-offset-4">Read the full rules</button></div>
+        <div className="rounded-[28px] bg-[#fff7ed] p-6"><div className="flex items-center gap-3 text-[#a76b27]"><SkipForward size={18} /><p className="font-display text-base font-semibold">How it works</p></div><p className="mt-3 text-xs leading-5 text-[#967950]">Both phones enter the same live queue. The server pairs two available people and creates a private Daily room. Closing the room automatically searches again.</p>{lastConversationId && <Link to={`/messages/${lastConversationId}`} className="mt-4 inline-flex items-center gap-2 text-xs font-extrabold text-[#a76b27]"><MessageCircle size={15} />Open the conversation</Link>}</div>
+      </aside>
+    </section>
 
-    {preview && <div className="fixed inset-0 z-50 flex items-end justify-center bg-[#172d20]/45 p-3 backdrop-blur-sm sm:items-center"><div className="w-full max-w-lg rounded-[30px] bg-white p-6 shadow-soft sm:p-8"><div className="flex items-start justify-between"><div className="flex items-center gap-4"><Avatar src={preview.avatar} name={preview.fullName} size="lg" online={preview.online} /><div><h2 className="font-display text-xl font-semibold">{preview.fullName}</h2><p className="mt-1 text-xs text-[#839087]">{preview.course} · {preview.yearLevel}</p></div></div><button onClick={() => setPreview(null)} className="rounded-xl p-2 text-[#89958d] hover:bg-mist"><X size={18} /></button></div><p className="mt-6 text-sm leading-6 text-[#69766e]">{preview.bio}</p><div className="mt-5 grid gap-3 sm:grid-cols-2"><div className="rounded-2xl bg-mint p-4"><p className="text-[10px] font-extrabold uppercase tracking-wide text-moss">Can teach</p><p className="mt-2 text-xs font-bold leading-5 text-[#4f7159]">{preview.strengths.map((skill) => skill.name).join(' · ')}</p></div><div className="rounded-2xl bg-[#fff5e5] p-4"><p className="text-[10px] font-extrabold uppercase tracking-wide text-[#a76b27]">Learning next</p><p className="mt-2 text-xs font-bold leading-5 text-[#93754d]">{preview.weaknesses.map((skill) => skill.name).join(' · ')}</p></div></div><Button onClick={() => setPreview(null)} className="mt-6 w-full">Close profile</Button></div></div>}
+    {rulesOpen && <div className="fixed inset-0 z-[90] flex items-end justify-center bg-[#172d20]/55 p-3 backdrop-blur-sm sm:items-center"><div className="w-full max-w-lg rounded-[30px] bg-white p-6 shadow-soft sm:p-8"><div className="flex items-start justify-between gap-4"><div><Pill tone="green">Before you meet</Pill><h2 className="mt-4 font-display text-2xl font-semibold tracking-[-0.04em]">Keep random chat safe</h2></div><button onClick={() => setRulesOpen(false)} className="rounded-xl p-2 text-[#89958d] hover:bg-mist" aria-label="Close rules"><X size={18} /></button></div><div className="mt-6 space-y-3 text-sm leading-6 text-[#5d6b62]"><p>You must be 18 or older. Do not show or request nudity, sexual content, violence, illegal activity, personal documents, passwords, or financial information.</p><p>Be respectful. Do not harass, threaten, discriminate, record, or share another person’s video without consent.</p><p>Use <strong>Next</strong>, <strong>Block</strong>, or <strong>Report</strong> immediately when something feels unsafe. Serious or repeated violations may result in removal.</p></div>{error && <p className="mt-4 rounded-2xl bg-[#fff0ec] p-3 text-xs font-semibold leading-5 text-[#a8523e]">{error}</p>}<Button onClick={() => void acceptRulesAndStart()} disabled={acceptingRules} className="mt-7 w-full">{acceptingRules ? <Loader2 size={16} className="animate-spin" /> : <Check size={16} />}I am 18+ and agree to the rules</Button></div></div>}
+    {encounter && <CallModal call={{ id: encounter.id, encounterId: encounter.id, otherUserId: encounter.participantIds.find((participantId) => participantId !== userId), conversationId: encounter.conversationId, kind: encounter.kind }} onClose={() => void finishEncounter('skipped')} onBlock={blockAndLeave} onReport={reportAndLeave} />}
   </div>
 }

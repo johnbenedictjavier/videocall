@@ -2,7 +2,7 @@
 
 StudyMatch is a mobile-first peer-learning prototype by TugmAI. It matches students through complementary strengths and learning gaps, then lets them continue in realtime buddy or peer-group spaces.
 
-The project includes a runnable local demo without credentials and production integration points for Supabase Realtime, Supabase Storage, Supabase Auth, and Daily voice/video rooms.
+The project includes a runnable local demo without credentials and a production random-meet flow for Supabase Auth, Supabase Postgres, Supabase Realtime, Supabase Storage, and Daily voice/video rooms.
 
 ## 1. Requirements
 
@@ -39,7 +39,7 @@ npx supabase link --project-ref puqnwypfdbzqxykamrvj
 npx supabase db push
 ```
 
-The migration creates profiles, skills, user skills, matches, match requests, peer groups, conversations, members, messages, message reads, notifications, calls, call participants, indexes, triggers, Realtime publication entries, Storage buckets, and RLS policies.
+The migrations create profiles, skills, user skills, matches, match requests, peer groups, conversations, members, messages, message reads, notifications, calls, call participants, random queue and encounter tables, rule acceptances, blocks, reports, indexes, triggers, Realtime publication entries, Storage buckets, and RLS policies.
 
 ## 4. Authentication
 
@@ -109,33 +109,45 @@ npm run seed:demo
 
 The seed creates 11 accounts, profiles, and skills. Its default password is `StudyMatch!2026`; override it with `DEMO_PASSWORD` and change it before sharing the project.
 
-## 11. Buddy Match Test
+## 11. Random Meet Test
+
+The production random flow uses a database-backed queue so two authenticated phones can be matched without sending requests. Apply both migrations, deploy the Daily function, and configure the Daily secrets before testing.
+
+1. Open the deployed HTTPS app on two phones.
+2. Sign in with two different Supabase accounts. Demo Login is local to one browser and cannot match across phones.
+3. Both users are sent to **Meet**, accept the 18+ rules, and enter the queue automatically.
+4. When both users select the same mode, the first two waiting users are paired and receive the same private Daily room.
+5. **Next** ends the encounter and starts another search. Safety options can report or block the other user.
+
+The queue is implemented with a transactional Supabase RPC for the initial release. A Redis/WebSocket gateway can replace it later if traffic requires higher matchmaking throughput.
+
+## 12. Buddy Match Test
 
 Use Alex's demo profile. The highest calculated match should be Maria because Maria's Java OOP and inheritance strengths cover Alex's gaps, while Alex's Database and SQL strengths cover Maria's gaps. Open the score breakdown to see the weighted calculation.
 
 Connect does not create a room automatically. The recipient must accept the request first. Acceptance creates the private buddy conversation.
 
-## 12. Peer Match Test
+## 13. Peer Match Test
 
 Open Match, switch to Peer group, and select Join Peer Group. The group algorithm searches combinations of at least three students and scores aggregate coverage of each member's weaknesses. It is not a same-subject grouping shortcut.
 
-## 13. Chat Test
+## 14. Chat Test
 
 Open a Buddy or Peer space. Messages persist in local storage in demo mode and use Supabase Postgres plus Realtime when a configured, non-demo account is signed in. Open two tabs to test cross-tab realtime fallback or two authenticated sessions to test Supabase Realtime.
 
 The composer supports timestamps, read state, typing indicators, date grouping, safe external links, and image sharing.
 
-## 14. Image Sharing Test
+## 15. Image Sharing Test
 
 Select the paperclip button, choose a PNG, JPEG, WebP, or GIF smaller than 8MB, preview/send it, and tap the image to open the fullscreen viewer. Supabase mode uploads to `chat-images`; demo mode uses a local preview so the flow is still demonstrable.
 
-## 15. Voice and Video Test
+## 16. Voice and Video Test
 
-Use the phone or camera button in a conversation. Demo Login still opens a local simulated room for product exploration. Authenticated users must have the Edge Function and Daily secrets configured; they receive the same private Daily room with separate user tokens and can use microphone, camera, screen sharing, participant grid, and leave controls. A production configuration error is shown instead of a fake room.
+Use the phone or camera button in a conversation for the original StudyMatch call flow. The random Meet flow automatically opens a private Daily room after two users are paired. Demo Login still opens a local simulated room for product exploration, but it cannot match across phones. Authenticated users must have the Edge Function and Daily secrets configured; they receive separate user tokens and can use microphone, camera, screen sharing, safety controls, and leave controls.
 
 To test incoming calls, open the same conversation in two demo tabs, switch personas, and start a call from one tab. The other tab receives an incoming-call overlay through `BroadcastChannel`. Supabase mode uses the `calls` Realtime table.
 
-## 16. Build
+## 17. Build
 
 ```bash
 npm run lint
@@ -145,7 +157,7 @@ npm run preview
 
 The build uses `HashRouter`, so it is compatible with static GitHub Pages hosting without server rewrites.
 
-## 17. GitHub Pages
+## 18. GitHub Pages
 
 The repository includes `.github/workflows/deploy.yml`, which builds and deploys the artifact through GitHub Actions. In repository Settings > Pages, select **GitHub Actions** as the source. The root page still redirects to a committed `dist` artifact when Pages is configured for branch-root hosting.
 
@@ -153,7 +165,7 @@ The repository includes `.github/workflows/deploy.yml`, which builds and deploys
 - `VITE_SUPABASE_ANON_KEY`
 Push to `main`. The workflow installs dependencies, builds the Vite app, and deploys `dist`. Branch-based Pages hosting requires the generated artifact fallback to be committed as well.
 
-## 18. Architecture
+## 19. Architecture
 
 ```text
 React + TypeScript + Vite + Tailwind
@@ -162,7 +174,7 @@ React + TypeScript + Vite + Tailwind
         +-- Supabase PostgreSQL + RLS
         +-- Supabase Realtime + Broadcast
         +-- Supabase Storage
-        +-- Weighted matching engine
+         +-- Random queue and encounter RPCs
         +-- Daily Edge Function
               |
               +-- Voice

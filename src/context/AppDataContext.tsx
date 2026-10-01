@@ -18,6 +18,7 @@ type AppDataContextValue = {
   joinPeerGroup: (group: PeerGroupMatch) => void
   markConversationRead: (conversationId: string) => void
   markNotificationRead: (notificationId: string) => void
+  refreshData: () => Promise<void>
   getConversationMessages: (conversationId: string) => Message[]
   getConversation: (conversationId: string) => Conversation | undefined
 }
@@ -296,9 +297,10 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     joinPeerGroup,
     markConversationRead,
     markNotificationRead,
+    refreshData: refreshRemoteData,
     getConversationMessages: (conversationId) => messages.filter((message) => message.conversationId === conversationId).sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()),
     getConversation: (conversationId) => conversations.find((conversation) => conversation.id === conversationId),
-  }), [conversations, createBuddyRequest, joinPeerGroup, markConversationRead, markNotificationRead, messages, notifications, requests, sendImageMessage, sendMessage, updateRequest, currentUser])
+  }), [conversations, createBuddyRequest, joinPeerGroup, markConversationRead, markNotificationRead, messages, notifications, requests, sendImageMessage, sendMessage, updateRequest, currentUser, refreshRemoteData])
 
   return <AppDataContext.Provider value={value}>{children}</AppDataContext.Provider>
 }

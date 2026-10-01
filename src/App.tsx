@@ -18,5 +18,5 @@ function ProtectedRoutes() {
 
 export function App() {
   const { currentUser } = useAuth()
-  return <Routes><Route path="/auth" element={currentUser ? <Navigate to="/" replace /> : <AuthPage />} /><Route element={<ProtectedRoutes />}><Route path="/" element={<DashboardPage />} /><Route path="/skillgps" element={<SkillGPSPage />} /><Route path="/match" element={<MatchPage />} /><Route path="/messages" element={<MessagesPage />} /><Route path="/messages/:conversationId" element={<ChatPage />} /><Route path="/profile" element={<ProfilePage />} /></Route><Route path="*" element={<Navigate to={currentUser ? '/' : '/auth'} replace />} /></Routes>
+  return <Routes><Route path="/auth" element={currentUser ? <Navigate to="/match" replace /> : <AuthPage />} /><Route element={<ProtectedRoutes />}><Route path="/" element={<Navigate to="/match" replace />} /><Route path="/dashboard" element={<DashboardPage />} /><Route path="/skillgps" element={<SkillGPSPage />} /><Route path="/match" element={<MatchPage />} /><Route path="/messages" element={<MessagesPage />} /><Route path="/messages/:conversationId" element={<ChatPage />} /><Route path="/profile" element={<ProfilePage />} /></Route><Route path="*" element={<Navigate to={currentUser ? '/match' : '/auth'} replace />} /></Routes>
 }

@@ -1,6 +1,6 @@
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
-import type { MatchBreakdown, Message, Skill, UserProfile } from '../types'
+import type { CallKind, MatchBreakdown, Message, RandomEncounter, Skill, UserProfile } from '../types'
 
 export const signInWithPassword = async (email: string, password: string) => {
   if (!supabase) throw new Error('Supabase is not configured. Use Demo Login instead.')
@@ -244,6 +244,87 @@ export const createCallInvite = async (payload: { conversationId: string; caller
   }).select().single()
   if (error) throw error
   return data
+}
+
+const mapRandomEncounter = (row: Record<string, unknown>): RandomEncounter => ({
+  id: String(row.id),
+  participantIds: Array.isArray(row.participant_ids) ? row.participant_ids.map(String) : [],
+  kind: row.kind as CallKind,
+  conversationId: row.conversation_id ? String(row.conversation_id) : undefined,
+  status: row.status as RandomEncounter['status'],
+  roomName: row.room_name ? String(row.room_name) : undefined,
+  roomUrl: row.room_url ? String(row.room_url) : undefined,
+  createdAt: String(row.created_at),
+  startedAt: row.started_at ? String(row.started_at) : undefined,
+  endedAt: row.ended_at ? String(row.ended_at) : undefined,
+})
+
+export const hasAcceptedRandomRules = async (userId: string, version = 'random-meet-v1') => {
+  if (!supabase) return false
+  const { data, error } = await supabase.from('rule_acceptances').select('user_id').eq('user_id', userId).eq('version', version).maybeSingle()
+  if (error) throw error
+  return Boolean(data)
+}
+
+export const acceptRandomRules = async (userId: string, version = 'random-meet-v1') => {
+  if (!supabase) throw new Error('Supabase is not configured.')
+  const { error } = await supabase.from('rule_acceptances').upsert({ user_id: userId, version }, { onConflict: 'user_id,version' })
+  if (error) throw error
+}
+
+export const joinRandomQueue = async (kind: CallKind) => {
+  if (!supabase) throw new Error('Supabase is not configured. Use a real account for cross-phone matching.')
+  const { data, error } = await supabase.rpc('join_random_queue', { p_kind: kind })
+  if (error) throw error
+  const row = Array.isArray(data) ? data[0] : data
+  if (!row?.encounter_id) return null
+  return mapRandomEncounter({
+    id: row.encounter_id,
+    participant_ids: row.participant_ids,
+    kind: row.encounter_kind,
+    conversation_id: row.conversation_id,
+    status: 'matched',
+    created_at: new Date().toISOString(),
+  })
+}
+
+export const fetchRandomEncounter = async (userId: string) => {
+  if (!supabase) return null
+  const { data, error } = await supabase.from('random_encounters').select('*').contains('participant_ids', [userId]).in('status', ['matched', 'active']).order('created_at', { ascending: false }).limit(1).maybeSingle()
+  if (error) throw error
+  return data ? mapRandomEncounter(data as Record<string, unknown>) : null
+}
+
+export const leaveRandomQueue = async () => {
+  if (!supabase) return
+  const { error } = await supabase.rpc('leave_random_queue')
+  if (error) throw error
+}
+
+export const finishRandomEncounter = async (encounterId: string, status: 'ended' | 'skipped' = 'ended') => {
+  if (!supabase) return
+  const { error } = await supabase.rpc('finish_random_encounter', { p_encounter_id: encounterId, p_status: status })
+  if (error) throw error
+}
+
+export const blockRandomUser = async (userId: string, blockedUserId: string) => {
+  if (!supabase) throw new Error('Supabase is not configured.')
+  const { error } = await supabase.from('random_blocks').upsert({ blocker_id: userId, blocked_id: blockedUserId }, { onConflict: 'blocker_id,blocked_id' })
+  if (error) throw error
+}
+
+export const reportRandomUser = async (userId: string, reportedUserId: string, encounterId: string, reason: string) => {
+  if (!supabase) throw new Error('Supabase is not configured.')
+  const { error } = await supabase.from('random_reports').insert({ reporter_id: userId, reported_id: reportedUserId, encounter_id: encounterId, reason })
+  if (error) throw error
+}
+
+export const createDailyEncounterRoom = async (encounterId: string, kind: CallKind) => {
+  if (!supabase) return null
+  const { data, error } = await supabase.functions.invoke('create-daily-room', { body: { encounterId, kind } })
+  if (error) throw error
+  if (!data?.roomUrl || !data?.token) throw new Error(data?.error ?? 'The live encounter room could not be created.')
+  return data as { roomUrl: string; roomName: string; token: string }
 }
 
 export const updateCallStatus = async (callId: string, status: 'declined' | 'ended') => {

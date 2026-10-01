@@ -1,6 +1,6 @@
 {
-  "name": "TugmAI StudyMatch",
-  "short_name": "StudyMatch",
+  "name": "TugmAI Random Meet",
+  "short_name": "Random Meet",
   "description": "Find peers who complement the way you learn.",
   "start_url": "./",
   "display": "standalone",

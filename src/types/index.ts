@@ -139,3 +139,16 @@ export type CallSession = {
   status: 'ringing' | 'active' | 'ended'
   createdAt: string
 }
+
+export type RandomEncounter = {
+  id: string
+  participantIds: string[]
+  kind: CallKind
+  conversationId?: string
+  status: 'matched' | 'active' | 'ended' | 'skipped'
+  roomName?: string
+  roomUrl?: string
+  createdAt: string
+  startedAt?: string
+  endedAt?: string
+}

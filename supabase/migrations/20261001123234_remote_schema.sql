@@ -1,0 +1,2 @@
+-- This migration was already applied to the linked Supabase project before it
+-- was present in this checkout. Its remote schema changes are preserved there.

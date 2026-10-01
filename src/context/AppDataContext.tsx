@@ -1,9 +1,10 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { storage } from '../lib/storage'
 import { isSupabaseConfigured, supabase } from '../lib/supabase'
-import { clearRemoteConversationHistory, createRemoteConversation, fetchRemoteConversations, fetchRemoteNotifications, fetchRemoteRequests, insertCalculatedMatch, insertMessage, insertMatchRequest as createRemoteRequest, markRemoteConversationRead, markRemoteNotificationRead, subscribeToConversation, subscribeToUserEvents, updateMatchRequest, uploadChatImage } from '../services/supabaseService'
+import { clearRemoteConversationHistory, createRemoteConversation, fetchRemoteConversations, fetchRemoteNotifications, fetchRemoteRequests, insertCalculatedMatch, insertMessage, insertMatchRequest as createRemoteRequest, markRemoteConversationRead, markRemoteNotificationRead, subscribeToConversation, subscribeToUserEvents, updateMatchRequest, uploadChatAttachment } from '../services/supabaseService'
 import type { Conversation, MatchRequest, Message, NotificationItem, PeerGroupMatch } from '../types'
 import { useAuth } from './AuthContext'
+import { getMessagePreview, isVisibleMessage } from '../utils/message'
 
 type AppDataContextValue = {
   conversations: Conversation[]
@@ -12,7 +13,7 @@ type AppDataContextValue = {
   notifications: NotificationItem[]
   unreadNotifications: number
   sendMessage: (conversationId: string, content: string) => Promise<Message>
-  sendImageMessage: (conversationId: string, file: File) => Promise<Message>
+  sendAttachmentMessage: (conversationId: string, file: File) => Promise<Message>
   createBuddyRequest: (payload: { recipientId: string; matchId: string; score: number; breakdown?: import('../types').MatchBreakdown }) => Promise<void>
   updateRequest: (requestId: string, status: 'accepted' | 'declined' | 'skipped') => Promise<void>
   joinPeerGroup: (group: PeerGroupMatch) => void
@@ -29,7 +30,7 @@ const AppDataContext = createContext<AppDataContextValue | null>(null)
 const fileToDataUrl = (file: File) => new Promise<string>((resolve, reject) => {
   const reader = new FileReader()
   reader.onload = () => resolve(String(reader.result))
-  reader.onerror = () => reject(new Error('Unable to preview that image.'))
+  reader.onerror = () => reject(new Error('Unable to read that attachment.'))
   reader.readAsDataURL(file)
 })
 
@@ -96,7 +97,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     setConversations((current) => {
       const next = current.map((conversation) => conversation.id === message.conversationId ? {
         ...conversation,
-        lastMessage: message.kind === 'image' ? 'Shared an image' : message.content,
+        lastMessage: getMessagePreview(message),
         lastMessageAt: message.createdAt,
         unreadCount: message.senderId === currentUser?.id ? conversation.unreadCount : conversation.unreadCount + 1,
       } : conversation)
@@ -132,7 +133,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     setConversations((current) => {
       const next = current.map((conversation) => conversation.id === message.conversationId ? {
         ...conversation,
-        lastMessage: message.kind === 'image' ? 'Sent an image' : message.content,
+        lastMessage: getMessagePreview(message),
         lastMessageAt: message.createdAt,
       } : conversation)
       if (!remoteEnabled) storage.setConversations(next)
@@ -162,21 +163,22 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     return message
   }, [addMessage, currentUser, remoteEnabled])
 
-  const sendImageMessage = useCallback(async (conversationId: string, file: File) => {
+  const sendAttachmentMessage = useCallback(async (conversationId: string, file: File) => {
     if (!currentUser) throw new Error('Please sign in first.')
-    if (!file.type.startsWith('image/')) throw new Error('Only image files can be shared.')
-    if (file.size > 8 * 1024 * 1024) throw new Error('Images must be smaller than 8MB.')
+    if (file.size > 12 * 1024 * 1024) throw new Error('Files must be smaller than 12MB.')
     const now = new Date().toISOString()
-    let imageUrl = await fileToDataUrl(file)
-    let imagePath: string | undefined
+    const kind = file.type.startsWith('image/') ? 'image' : 'file'
+    let attachmentUrl: string | undefined
+    let attachmentPath: string | undefined
     if (remoteEnabled) {
-      const uploaded = await uploadChatImage(file, currentUser.id, conversationId)
+      const uploaded = await uploadChatAttachment(file, currentUser.id, conversationId)
       if (uploaded) {
-        imageUrl = uploaded.url
-        imagePath = uploaded.path
+        attachmentUrl = uploaded.url
+        attachmentPath = uploaded.path
       }
     }
-    const payload = { conversationId, senderId: currentUser.id, content: '', kind: 'image' as const, attachmentUrl: imageUrl, attachmentPath: imagePath, attachmentName: file.name, createdAt: now, readBy: [currentUser.id] }
+    if (!attachmentUrl) attachmentUrl = await fileToDataUrl(file)
+    const payload = { conversationId, senderId: currentUser.id, content: '', kind: kind as Message['kind'], attachmentUrl, attachmentPath, attachmentName: file.name, createdAt: now, readBy: [currentUser.id] }
     if (remoteEnabled && supabase) {
       const row = await insertMessage(payload)
       const message: Message = { ...payload, id: String(row?.id ?? crypto.randomUUID()), createdAt: String(row?.created_at ?? now) }
@@ -300,8 +302,6 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
       name: 'The Study Loop',
       memberIds: group.members.map((member) => member.id),
       avatar: group.members.find((member) => member.id !== currentUser?.id)?.avatar,
-      lastMessage: 'Your peer group is ready to learn together.',
-      lastMessageAt: new Date().toISOString(),
       unreadCount: 0,
       online: true,
     }
@@ -310,14 +310,16 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     storage.setConversations(next)
   }, [conversations, currentUser])
 
+  const visibleConversations = useMemo(() => conversations.filter((conversation) => messages.some((message) => message.conversationId === conversation.id && isVisibleMessage(message))), [conversations, messages])
+
   const value = useMemo<AppDataContextValue>(() => ({
-    conversations,
+    conversations: visibleConversations,
     messages,
     requests,
     notifications: currentUser ? notifications.filter((notification) => notification.userId === currentUser.id) : [],
     unreadNotifications: currentUser ? notifications.filter((notification) => notification.userId === currentUser.id && !notification.read).length : 0,
     sendMessage,
-    sendImageMessage,
+    sendAttachmentMessage,
     createBuddyRequest,
     updateRequest,
     joinPeerGroup,
@@ -327,7 +329,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
     refreshData: refreshRemoteData,
     getConversationMessages: (conversationId) => messages.filter((message) => message.conversationId === conversationId).sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()),
     getConversation: (conversationId) => conversations.find((conversation) => conversation.id === conversationId),
-  }), [clearConversationHistory, conversations, createBuddyRequest, joinPeerGroup, markConversationRead, markNotificationRead, messages, notifications, requests, sendImageMessage, sendMessage, updateRequest, currentUser, refreshRemoteData])
+  }), [clearConversationHistory, conversations, createBuddyRequest, joinPeerGroup, markConversationRead, markNotificationRead, messages, notifications, requests, sendAttachmentMessage, sendMessage, updateRequest, currentUser, refreshRemoteData, visibleConversations])
 
   return <AppDataContext.Provider value={value}>{children}</AppDataContext.Provider>
 }

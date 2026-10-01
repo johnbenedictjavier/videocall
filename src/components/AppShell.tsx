@@ -28,12 +28,31 @@ export function AppShell() {
 
   if (!currentUser) return null
 
+  const isConversationPage = location.pathname.startsWith('/messages/')
   const unreadMessages = conversations.reduce((total, conversation) => total + conversation.unreadCount, 0)
-  const title = location.pathname.startsWith('/dashboard') ? 'Your dashboard' : location.pathname.startsWith('/skillgps') ? 'Your learning profile' : location.pathname.startsWith('/match') ? 'Meet someone new' : location.pathname.startsWith('/messages') ? 'Study spaces' : location.pathname.startsWith('/profile') ? 'Your profile' : 'Good to see you'
+  const title = location.pathname.startsWith('/dashboard')
+    ? 'Your dashboard'
+    : location.pathname.startsWith('/skillgps')
+      ? 'Your learning profile'
+      : location.pathname.startsWith('/match')
+        ? 'Meet someone new'
+        : location.pathname.startsWith('/messages')
+          ? 'Study spaces'
+          : location.pathname.startsWith('/profile')
+            ? 'Your profile'
+            : 'Good to see you'
 
   const notificationPanel = notificationsOpen && <>
     <button aria-label="Close notifications" onClick={() => setNotificationsOpen(false)} className="fixed inset-0 z-40 bg-black/10 lg:hidden" />
-    <div className="fixed inset-x-3 top-16 z-50 max-h-[calc(100dvh-6rem)] overflow-y-auto rounded-[24px] border border-[#e1eae1] bg-white p-3 shadow-soft sm:left-auto sm:right-4 sm:w-[360px] lg:absolute lg:inset-x-auto lg:right-0 lg:top-12 lg:max-h-96"><div className="flex items-center justify-between px-2 py-1"><div><p className="font-display text-sm font-semibold">Notifications</p><p className="text-[11px] text-[#859188]">Realtime activity</p></div><IconButton label="Close notifications" onClick={() => setNotificationsOpen(false)}><X size={15} /></IconButton></div>{notifications.length === 0 ? <p className="px-2 py-8 text-center text-xs text-[#87938b]">You are all caught up.</p> : <div className="mt-2 space-y-1">{notifications.slice(0, 12).map((notification) => <button key={notification.id} onClick={() => { markNotificationRead(notification.id); setNotificationsOpen(false) }} className={cn('block w-full rounded-2xl p-3 text-left transition hover:bg-mist', !notification.read && 'bg-[#f2faf2]')}><div className="flex items-start justify-between gap-3"><p className="text-xs font-extrabold text-ink">{notification.title}</p><span className="shrink-0 text-[10px] text-[#9aa59d]">{formatRelativeTime(notification.createdAt)}</span></div><p className="mt-1 text-xs leading-5 text-[#758178]">{notification.body}</p></button>)}</div>}</div>
+    <div className="fixed inset-x-3 top-16 z-50 max-h-[calc(100dvh-6rem)] overflow-y-auto rounded-[24px] border border-[#e1eae1] bg-white p-3 shadow-soft sm:left-auto sm:right-4 sm:w-[360px] lg:absolute lg:inset-x-auto lg:right-0 lg:top-12 lg:max-h-96">
+      <div className="flex items-center justify-between px-2 py-1">
+        <div><p className="font-display text-sm font-semibold">Notifications</p><p className="text-[11px] text-[#859188]">Realtime activity</p></div>
+        <IconButton label="Close notifications" onClick={() => setNotificationsOpen(false)}><X size={15} /></IconButton>
+      </div>
+      {notifications.length === 0
+        ? <p className="px-2 py-8 text-center text-xs text-[#87938b]">You are all caught up.</p>
+        : <div className="mt-2 space-y-1">{notifications.slice(0, 12).map((notification) => <button key={notification.id} onClick={() => { markNotificationRead(notification.id); setNotificationsOpen(false) }} className={cn('block w-full rounded-2xl p-3 text-left transition hover:bg-mist', !notification.read && 'bg-[#f2faf2]')}><div className="flex items-start justify-between gap-3"><p className="text-xs font-extrabold text-ink">{notification.title}</p><span className="shrink-0 text-[10px] text-[#9aa59d]">{formatRelativeTime(notification.createdAt)}</span></div><p className="mt-1 text-xs leading-5 text-[#758178]">{notification.body}</p></button>)}</div>}
+    </div>
   </>
 
   return <div className="min-h-screen bg-cream text-ink">
@@ -46,7 +65,13 @@ export function AppShell() {
     </aside>
 
     <div className="lg:pl-[252px]">
-      <header className="sticky top-0 z-20 border-b border-[#e8eee8]/80 bg-cream/90 px-4 py-4 backdrop-blur-xl sm:px-8 lg:px-10 lg:py-6"><div className="mx-auto flex max-w-[1160px] items-center justify-between gap-4"><div className="flex items-center gap-3 lg:hidden"><div className="flex h-9 w-9 items-center justify-center rounded-xl bg-moss text-white"><Sparkles size={17} fill="currentColor" /></div><div><div className="font-display text-base font-bold tracking-[-0.05em]">TugmAI</div><div className="text-[9px] font-extrabold uppercase tracking-[0.16em] text-[#8a988f]">StudyMatch</div></div></div><div className="hidden lg:block"><p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-moss">{isDemo ? 'Demo workspace' : 'Connected workspace'}</p><h1 className="mt-1 font-display text-xl font-semibold tracking-[-0.04em]">{title}</h1></div><div className="ml-auto flex items-center gap-2"><div className="relative"><IconButton label="Notifications" onClick={() => { setNotificationsOpen((open) => !open); setAccountOpen(false) }} className="border border-[#e4ebe4] bg-white"><Bell size={18} />{unreadNotifications > 0 && <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-coral ring-2 ring-white" />}</IconButton>{notificationPanel}</div><div className="relative lg:hidden"><button aria-label="Open account menu" onClick={() => { setAccountOpen((open) => !open); setNotificationsOpen(false) }} className="rounded-full focus-visible:outline-none"><Avatar src={currentUser.avatar} name={currentUser.fullName} size="sm" online={currentUser.online} /></button>{accountOpen && <div className="absolute right-0 top-12 z-50 w-48 rounded-2xl border border-[#e1eae1] bg-white p-2 shadow-soft"><div className="border-b border-[#edf2ed] px-3 py-2"><p className="truncate text-xs font-extrabold">{currentUser.fullName}</p><p className="truncate text-[10px] text-[#89958d]">{currentUser.email}</p></div><NavLink to="/profile" onClick={() => setAccountOpen(false)} className="mt-1 flex items-center gap-2 rounded-xl px-3 py-2.5 text-xs font-bold text-[#66746b] hover:bg-mist"><UserRound size={15} />Profile</NavLink><button onClick={() => void signOut()} className="flex w-full items-center gap-2 rounded-xl px-3 py-2.5 text-left text-xs font-bold text-[#a8523e] hover:bg-[#fff0ec]"><LogOut size={15} />Sign out</button></div>}</div></div></div></header>
+      <header className={cn('sticky top-0 z-20 border-b border-[#e8eee8]/80 bg-cream/90 px-4 py-4 backdrop-blur-xl sm:px-8 lg:px-10 lg:py-6', isConversationPage && 'hidden lg:block')}>
+        <div className="mx-auto flex max-w-[1160px] items-center justify-between gap-4">
+          <div className="flex items-center gap-3 lg:hidden"><div className="flex h-9 w-9 items-center justify-center rounded-xl bg-moss text-white"><Sparkles size={17} fill="currentColor" /></div><div><div className="font-display text-base font-bold tracking-[-0.05em]">TugmAI</div><div className="text-[9px] font-extrabold uppercase tracking-[0.16em] text-[#8a988f]">StudyMatch</div></div></div>
+          <div className="hidden lg:block"><p className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-moss">{isDemo ? 'Demo workspace' : 'Connected workspace'}</p><h1 className="mt-1 font-display text-xl font-semibold tracking-[-0.04em]">{title}</h1></div>
+          <div className="ml-auto flex items-center gap-2"><div className="relative"><IconButton label="Notifications" onClick={() => { setNotificationsOpen((open) => !open); setAccountOpen(false) }} className="border border-[#e4ebe4] bg-white"><Bell size={18} />{unreadNotifications > 0 && <span className="absolute right-1.5 top-1.5 h-2 w-2 rounded-full bg-coral ring-2 ring-white" />}</IconButton>{notificationPanel}</div><div className="relative lg:hidden"><button aria-label="Open account menu" onClick={() => { setAccountOpen((open) => !open); setNotificationsOpen(false) }} className="rounded-full focus-visible:outline-none"><Avatar src={currentUser.avatar} name={currentUser.fullName} size="sm" online={currentUser.online} /></button>{accountOpen && <div className="absolute right-0 top-12 z-50 w-48 rounded-2xl border border-[#e1eae1] bg-white p-2 shadow-soft"><div className="border-b border-[#edf2ed] px-3 py-2"><p className="truncate text-xs font-extrabold">{currentUser.fullName}</p><p className="truncate text-[10px] text-[#89958d]">{currentUser.email}</p></div><NavLink to="/profile" onClick={() => setAccountOpen(false)} className="block rounded-xl px-3 py-2 text-xs font-bold hover:bg-mist">Profile</NavLink><button onClick={() => void signOut()} className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-xs font-bold text-[#a8523e] hover:bg-[#fff0ec]"><LogOut size={14} />Sign out</button></div>}</div></div>
+        </div>
+      </header>
 
       <main className="mx-auto min-h-[calc(100dvh-80px)] max-w-[1160px] px-4 pb-28 pt-6 sm:px-8 lg:px-10 lg:pb-10 lg:pt-8"><Outlet /></main>
     </div>

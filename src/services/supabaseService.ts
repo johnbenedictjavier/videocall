@@ -1,6 +1,7 @@
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
 import type { CallKind, CallRating, MatchBreakdown, MatchMode, Message, RandomEncounter, Skill, UserProfile } from '../types'
+import { getMessagePreview } from '../utils/message'
 
 export const signInWithPassword = async (email: string, password: string) => {
   if (!supabase) throw new Error('Supabase is not configured. Use Demo Login instead.')
@@ -101,7 +102,7 @@ export const fetchRemoteConversations = async (userId: string) => {
     const latest = conversationMessages[conversationMessages.length - 1]
     return {
       ...conversation,
-      lastMessage: latest ? latest.kind === 'image' ? 'Shared an image' : latest.content : undefined,
+      lastMessage: getMessagePreview(latest),
       lastMessageAt: latest?.createdAt,
       unreadCount: conversationMessages.filter((message) => message.senderId !== userId && !message.readBy.includes(userId)).length,
     }
@@ -202,10 +203,9 @@ export const createRemoteConversation = async (payload: { type: 'buddy' | 'peer'
   return conversation
 }
 
-export const uploadChatImage = async (file: File, userId: string, conversationId: string) => {
+export const uploadChatAttachment = async (file: File, userId: string, conversationId: string) => {
   if (!supabase) return null
-  if (!file.type.startsWith('image/')) throw new Error('Please choose an image file.')
-  if (file.size > 8 * 1024 * 1024) throw new Error('Images must be smaller than 8MB.')
+  if (file.size > 12 * 1024 * 1024) throw new Error('Files must be smaller than 12MB.')
   const path = `${userId}/${conversationId}/${crypto.randomUUID()}-${file.name.replace(/[^a-z0-9.\-_]/gi, '-')}`
   const { error: uploadError } = await supabase.storage.from('chat-images').upload(path, file, { contentType: file.type, upsert: false })
   if (uploadError) throw uploadError

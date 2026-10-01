@@ -15,9 +15,10 @@ export function Avatar({ src, name, size = 'md', online = false, className }: { 
 }
 
 export function Button({ variant = 'primary', size = 'md', className, children, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: 'primary' | 'secondary' | 'ghost' | 'soft' | 'danger'; size?: 'sm' | 'md' | 'lg' }) {
+  const customLightBackground = variant === 'primary' && typeof className === 'string' && /(^|\s)!?bg-white(\s|$)/.test(className)
   return (
     <button className={cn('inline-flex items-center justify-center gap-2 rounded-2xl font-bold transition duration-200 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50', {
-      'bg-moss text-white shadow-[0_8px_20px_rgba(46,107,76,0.2)] hover:bg-[#245a3f]': variant === 'primary',
+      'bg-moss text-white shadow-[0_8px_20px_rgba(46,107,76,0.2)] hover:bg-[#245a3f]': variant === 'primary' && !customLightBackground,
       'border border-[#dfe8df] bg-white text-ink hover:border-moss/40 hover:bg-cream': variant === 'secondary',
       'text-ink hover:bg-mist': variant === 'ghost',
       'bg-mint text-moss hover:bg-[#d7eddd]': variant === 'soft',

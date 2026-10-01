@@ -209,7 +209,7 @@ export const subscribeToConversation = (conversationId: string, callback: (messa
 export const subscribeToUserEvents = (userId: string, onEvent: (payload: Record<string, unknown>) => void): RealtimeChannel | null => {
   if (!supabase) return null
   return supabase
-    .channel(`user-events:${userId}`)
+    .channel(`user-events:${userId}:${crypto.randomUUID()}`)
     .on('postgres_changes', { event: '*', schema: 'public', table: 'match_requests', filter: `recipient_id=eq.${userId}` }, (payload) => onEvent(payload.new as Record<string, unknown>))
     .on('postgres_changes', { event: '*', schema: 'public', table: 'match_requests', filter: `sender_id=eq.${userId}` }, (payload) => onEvent(payload.new as Record<string, unknown>))
     .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${userId}` }, (payload) => onEvent(payload.new as Record<string, unknown>))

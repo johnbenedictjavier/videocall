@@ -1,5 +1,8 @@
 import type { AvailabilitySlot, BuddyMatch, PeerGroupMatch, Skill, UserProfile } from '../../types'
 
+export const MIN_PEER_MEMBERS = 3
+export const MAX_PEER_MEMBERS = 5
+
 const aliases: Record<string, string[]> = {
   database: ['sql', 'postgres', 'mysql', 'data systems'],
   sql: ['database', 'postgres', 'mysql'],
@@ -144,9 +147,11 @@ export const calculatePeerGroup = (members: UserProfile[]): PeerGroupMatch => {
 
 export const findBestPeerGroup = (current: UserProfile, profiles: UserProfile[]) => {
   const candidates = profiles.filter((profile) => profile.id !== current.id).sort((a, b) => calculateBuddyMatch(current, b).score - calculateBuddyMatch(current, a).score).slice(0, 8)
+  if (candidates.length < MIN_PEER_MEMBERS - 1) return null
   const groups = [
-    ...combinations(candidates, 2),
-    ...combinations(candidates, 3),
+    ...combinations(candidates, MIN_PEER_MEMBERS - 1),
+    ...combinations(candidates, MIN_PEER_MEMBERS),
+    ...combinations(candidates, MAX_PEER_MEMBERS - 1),
   ].map((group) => calculatePeerGroup([current, ...group]))
-  return groups.sort((a, b) => b.score - a.score || b.members.length - a.members.length)[0] ?? calculatePeerGroup([current, ...candidates.slice(0, 2)])
+  return groups.sort((a, b) => b.score - a.score || b.members.length - a.members.length)[0] ?? null
 }

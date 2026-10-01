@@ -10,12 +10,14 @@ export type IncomingCall = {
   conversationId: string
   kind: CallKind
   caller: UserProfile
+  participantIds: string[]
 }
 
 type ActiveCall = {
   id: string
   conversationId: string
   kind: CallKind
+  participantIds: string[]
 }
 
 type CallContextValue = {
@@ -45,7 +47,8 @@ export function CallProvider({ children }: { children: ReactNode }) {
     const showIncoming = (payload: Record<string, unknown>, caller: UserProfile) => {
       const kind = payload.kind === 'voice' || payload.kind === 'video' ? payload.kind : null
       if (!kind || !payload.conversation_id) return
-      setIncomingCall({ id: String(payload.id ?? crypto.randomUUID()), conversationId: String(payload.conversation_id), kind, caller })
+      const recipientIds = Array.isArray(payload.recipient_ids) ? payload.recipient_ids.map(String) : []
+      setIncomingCall({ id: String(payload.id ?? crypto.randomUUID()), conversationId: String(payload.conversation_id), kind, caller, participantIds: [...new Set([caller.id, ...recipientIds])] })
     }
     const realtimeChannel = remoteEnabled ? subscribeToUserEvents(currentUser.id, (payload) => {
       const recipientIds = Array.isArray(payload.recipient_ids) ? payload.recipient_ids.map(String) : []
@@ -73,7 +76,7 @@ export function CallProvider({ children }: { children: ReactNode }) {
         if (payload.type !== 'invite' || !payload.recipientIds?.includes(currentUser.id) || !payload.conversationId || !payload.kind || !payload.callerId) return
         const caller = storage.profiles.find((profile) => profile.id === payload.callerId)
         if (!caller) return
-        setIncomingCall({ id: payload.id ?? crypto.randomUUID(), conversationId: payload.conversationId, kind: payload.kind, caller })
+        setIncomingCall({ id: payload.id ?? crypto.randomUUID(), conversationId: payload.conversationId, kind: payload.kind, caller, participantIds: [...new Set([payload.callerId, ...(payload.recipientIds ?? [])])] })
       }
       return () => {
         active = false
@@ -100,14 +103,14 @@ export function CallProvider({ children }: { children: ReactNode }) {
         const remote = remoteEnabled ? await createCallInvite({ conversationId: conversation.id, callerId: currentUser.id, recipientIds, kind }) : null
         const id = String(remote?.id ?? crypto.randomUUID())
         if (channelRef.current) channelRef.current.postMessage({ type: 'invite', id, conversationId: conversation.id, kind, callerId: currentUser.id, recipientIds })
-        setActiveCall({ id, conversationId: conversation.id, kind })
+        setActiveCall({ id, conversationId: conversation.id, kind, participantIds: conversation.memberIds })
       } catch (error) {
         setCallError(error instanceof Error ? error.message : 'The call could not be started.')
       }
     },
     acceptCall: () => {
       if (!incomingCall) return
-      setActiveCall({ id: incomingCall.id, conversationId: incomingCall.conversationId, kind: incomingCall.kind })
+      setActiveCall({ id: incomingCall.id, conversationId: incomingCall.conversationId, kind: incomingCall.kind, participantIds: incomingCall.participantIds })
       setIncomingCall(null)
     },
     declineCall: () => {

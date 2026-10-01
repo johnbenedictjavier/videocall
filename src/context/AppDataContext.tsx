@@ -292,6 +292,7 @@ export function AppDataProvider({ children }: { children: ReactNode }) {
   }, [currentUser, remoteEnabled])
 
   const joinPeerGroup = useCallback((group: PeerGroupMatch) => {
+    if (group.members.length < 3 || group.members.length > 5) return
     if (conversations.some((conversation) => conversation.id === group.id)) return
     const conversation: Conversation = {
       id: group.id,

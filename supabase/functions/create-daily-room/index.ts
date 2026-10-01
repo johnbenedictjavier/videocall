@@ -78,19 +78,29 @@ Deno.serve(async (request) => {
       roomUrl = typeof call.room_url === 'string' ? call.room_url : ''
     }
 
+    if (participantIds.length < 2 || participantIds.length > 5) return json({ error: 'A call can have between two and five participants.' }, 400)
+
     if (!roomName || !roomUrl) {
       // A deterministic name makes concurrent token requests resolve to one Daily room.
       roomName = body.encounterId ? `random-meet-${body.encounterId}` : `studymatch-${body.callId}`
       const roomPayload = {
         name: roomName,
         privacy: 'private',
-        properties: { exp: Math.floor(Date.now() / 1000) + 60 * 60 * 8, enable_prejoin_ui: false, enable_screenshare: true },
+        properties: { exp: Math.floor(Date.now() / 1000) + 60 * 60 * 8, max_participants: 5, enable_prejoin_ui: false, enable_screenshare: true },
       }
       const roomResponse = await fetch('https://api.daily.co/v1/rooms', {
         method: 'POST',
         headers: { Authorization: `Bearer ${dailyApiKey}`, 'Content-Type': 'application/json' },
         body: JSON.stringify(roomPayload),
       })
+
+      if (!roomResponse.ok) {
+  console.error(
+    'Daily room creation failed:',
+    roomResponse.status,
+    await roomResponse.clone().text()
+  );
+}
 
       let room: { url?: string } = {}
       if (roomResponse.ok) {

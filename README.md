@@ -117,9 +117,10 @@ The production random flow uses a database-backed queue so two authenticated pho
 
 1. Open the deployed HTTPS app on two phones.
 2. Sign in with two different Supabase accounts. Demo Login is local to one browser and cannot match across phones.
-3. Both users are sent to **Meet**, accept the 18+ rules, and enter the queue automatically.
-4. When both users select the same mode, the first two waiting users are paired and receive the same private Daily room.
-5. **Next** ends the encounter and starts another search. Safety options can report or block the other user.
+3. Open **Meet**, choose **Study Buddy** or **Peer**, select voice or video, and accept the 18+ rules.
+4. Study Buddy pairs exactly two users. Peer rooms open at three users and accept up to five; a full room does not accept a sixth user.
+5. **Stop** or `Esc` leaves matching. **Next** or `Right Arrow` ends the encounter and starts another search.
+6. When a call ends, each other participant can receive a 1–5 rating; individual ratings can be skipped.
 
 The queue is implemented with a transactional Supabase RPC for the initial release. A Redis/WebSocket gateway can replace it later if traffic requires higher matchmaking throughput.
 
@@ -145,9 +146,9 @@ Select the paperclip button, choose a PNG, JPEG, WebP, or GIF smaller than 8MB, 
 
 ## 16. Voice and Video Test
 
-Use the phone or camera button in a conversation for the original StudyMatch call flow. The random Meet flow automatically opens a private Daily room after two users are paired. Demo Login still opens a local simulated room for product exploration, but it cannot match across phones. Authenticated users must have the Edge Function and Daily secrets configured; they receive separate user tokens and can use microphone, camera, screen sharing, safety controls, and leave controls.
+Use the phone or camera button in a conversation for the original StudyMatch call flow. Meet opens a private Daily room after the selected Buddy or Peer room is matched. Demo Login still opens a local simulated room for product exploration, but it cannot match across phones. Authenticated users must have the Edge Function and Daily secrets configured; they receive separate user tokens and can use microphone, camera, screen sharing, safety controls, and leave controls.
 
-To test incoming calls, open the same conversation in two demo tabs, switch personas, and start a call from one tab. The other tab receives an incoming-call overlay through `BroadcastChannel`. Supabase mode uses the `calls` Realtime table.
+To test incoming calls, open the same conversation in two demo tabs, switch personas, and start a call from one tab. The other tab receives an incoming-call overlay through `BroadcastChannel`. Supabase mode uses the `calls` Realtime table. Conversation calls also show the post-call rating step.
 
 ## 17. Build
 

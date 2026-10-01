@@ -1,6 +1,6 @@
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
-import type { CallKind, MatchBreakdown, Message, RandomEncounter, Skill, UserProfile } from '../types'
+import type { CallKind, CallRating, MatchBreakdown, MatchMode, Message, RandomEncounter, Skill, UserProfile } from '../types'
 
 export const signInWithPassword = async (email: string, password: string) => {
   if (!supabase) throw new Error('Supabase is not configured. Use Demo Login instead.')
@@ -168,6 +168,8 @@ export const insertMatchRequest = async (request: {
 
 export const insertCalculatedMatch = async (payload: { createdBy: string; memberIds: string[]; mode: 'buddy' | 'peer'; score: number; breakdown: MatchBreakdown }) => {
   if (!supabase) return null
+  if (payload.mode === 'buddy' && payload.memberIds.length !== 2) throw new Error('A Study Buddy match needs exactly two members.')
+  if (payload.mode === 'peer' && (payload.memberIds.length < 3 || payload.memberIds.length > 5)) throw new Error('A Peer match must have between three and five members.')
   const { data: match, error } = await supabase.from('matches').insert({ created_by: payload.createdBy, mode: payload.mode, score: payload.score, score_breakdown: payload.breakdown }).select('id').single()
   if (error) throw error
   const { error: membersError } = await supabase.from('match_members').insert(payload.memberIds.map((userId) => ({ match_id: match.id, user_id: userId })))
@@ -184,6 +186,8 @@ export const updateMatchRequest = async (id: string, status: 'accepted' | 'decli
 
 export const createRemoteConversation = async (payload: { type: 'buddy' | 'peer'; name: string; memberIds: string[]; createdBy: string; matchId?: string }) => {
   if (!supabase) return null
+  if (payload.type === 'buddy' && payload.memberIds.length !== 2) throw new Error('A Study Buddy conversation needs exactly two members.')
+  if (payload.type === 'peer' && (payload.memberIds.length < 3 || payload.memberIds.length > 5)) throw new Error('A Peer conversation must have between three and five members.')
   if (payload.type === 'buddy' && payload.memberIds.length === 2) {
     const otherUserId = payload.memberIds.find((memberId) => memberId !== payload.createdBy)
     if (!otherUserId) throw new Error('A direct conversation needs another participant.')
@@ -304,6 +308,7 @@ export const createDailyRoom = async (conversationId: string, kind: 'voice' | 'v
 export const createCallInvite = async (payload: { conversationId: string; callerId: string; recipientIds: string[]; kind: 'voice' | 'video' }) => {
   if (!supabase) return null
   if (!payload.recipientIds.length) throw new Error('This study space has no other participants to call.')
+  if (payload.recipientIds.length + 1 > 5) throw new Error('Calls can have a maximum of five members.')
   const { data, error } = await supabase.from('calls').insert({
     conversation_id: payload.conversationId,
     caller_id: payload.callerId,
@@ -319,6 +324,8 @@ const mapRandomEncounter = (row: Record<string, unknown>): RandomEncounter => ({
   id: String(row.id),
   participantIds: Array.isArray(row.participant_ids) ? row.participant_ids.map(String) : [],
   kind: row.kind as CallKind,
+  mode: row.mode === 'peer' ? 'peer' : 'buddy',
+  maxMembers: Number(row.max_members ?? (row.mode === 'peer' ? 5 : 2)),
   conversationId: row.conversation_id ? String(row.conversation_id) : undefined,
   status: row.status as RandomEncounter['status'],
   roomName: row.room_name ? String(row.room_name) : undefined,
@@ -341,9 +348,9 @@ export const acceptRandomRules = async (userId: string, version = 'random-meet-v
   if (error) throw error
 }
 
-export const joinRandomQueue = async (kind: CallKind) => {
+export const joinRandomQueue = async (kind: CallKind, mode: MatchMode = 'buddy', maxMembers = mode === 'peer' ? 5 : 2) => {
   if (!supabase) throw new Error('Supabase is not configured. Use a real account for cross-phone matching.')
-  const { data, error } = await supabase.rpc('join_random_queue', { p_kind: kind })
+  const { data, error } = await supabase.rpc('join_meet_queue', { p_kind: kind, p_mode: mode, p_max_members: maxMembers })
   if (error) throw error
   const row = Array.isArray(data) ? data[0] : data
   if (!row?.encounter_id) return null
@@ -351,6 +358,8 @@ export const joinRandomQueue = async (kind: CallKind) => {
     id: row.encounter_id,
     participant_ids: row.participant_ids,
     kind: row.encounter_kind,
+    mode: row.encounter_mode,
+    max_members: row.encounter_max_members,
     conversation_id: row.conversation_id,
     status: 'matched',
     created_at: new Date().toISOString(),
@@ -399,5 +408,17 @@ export const createDailyEncounterRoom = async (encounterId: string, kind: CallKi
 export const updateCallStatus = async (callId: string, status: 'declined' | 'ended') => {
   if (!supabase || !callId) return
   const { error } = await supabase.from('calls').update({ status, ended_at: new Date().toISOString() }).eq('id', callId)
+  if (error) throw error
+}
+
+export const submitCallRating = async (rating: CallRating) => {
+  if (!supabase) return
+  const { error } = await supabase.rpc('submit_call_rating', {
+    p_call_id: rating.callId ?? null,
+    p_encounter_id: rating.encounterId ?? null,
+    p_ratee_id: rating.rateeId,
+    p_rating: rating.rating,
+    p_feedback: rating.feedback?.trim() || null,
+  })
   if (error) throw error
 }

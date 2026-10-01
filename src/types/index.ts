@@ -144,6 +144,8 @@ export type RandomEncounter = {
   id: string
   participantIds: string[]
   kind: CallKind
+  mode: MatchMode
+  maxMembers: number
   conversationId?: string
   status: 'matched' | 'active' | 'ended' | 'skipped'
   roomName?: string
@@ -151,4 +153,12 @@ export type RandomEncounter = {
   createdAt: string
   startedAt?: string
   endedAt?: string
+}
+
+export type CallRating = {
+  callId?: string
+  encounterId?: string
+  rateeId: string
+  rating: number
+  feedback?: string
 }

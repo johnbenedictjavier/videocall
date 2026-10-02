@@ -19,6 +19,11 @@ function RichMessage({ content, mine }: { content: string; mine: boolean }) {
 }
 
 function MessageAttachment({ message, mine, onImage }: { message: Message; mine: boolean; onImage: (url: string) => void }) {
+  if (message.kind === 'system' && message.meetingBoardId) {
+    let sections: Record<string, { content: string }[]> = {}
+    try { sections = (JSON.parse(message.content) as { sections?: Record<string, { content: string }[]> }).sections ?? {} } catch { /* Keep an empty card if old data is malformed. */ }
+    return <div className="min-w-[220px]"><div className="flex items-center gap-2 font-extrabold"><FileText size={17} />Meeting notes</div>{['notes', 'goals', 'plans'].map((section) => sections[section]?.length ? <div key={section} className="mt-3"><p className="text-[10px] font-extrabold uppercase tracking-[0.12em] opacity-60">{section}</p><ul className="mt-1 space-y-1">{sections[section].map((item, index) => <li key={index} className="text-xs">• {item.content}</li>)}</ul></div> : null)}</div>
+  }
   if (message.kind === 'image') {
     if (!message.attachmentUrl) return <div className="flex items-center gap-2"><FileImage size={18} /><span>{message.attachmentName ?? 'Shared image'}</span></div>
     return <button type="button" onClick={() => onImage(message.attachmentUrl!)} className="group relative block overflow-hidden rounded-xl"><img src={message.attachmentUrl} alt={message.attachmentName ?? 'Shared study image'} className="max-h-64 w-full object-cover transition group-hover:scale-[1.02]" /><span className="absolute inset-x-2 bottom-2 rounded-lg bg-black/45 px-2 py-1 text-left text-[10px] text-white opacity-0 transition group-hover:opacity-100">Open image</span></button>

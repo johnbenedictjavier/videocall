@@ -1,6 +1,6 @@
 import type { RealtimeChannel } from '@supabase/supabase-js'
 import { supabase } from '../lib/supabase'
-import type { CallKind, CallRating, MatchBreakdown, MatchMode, Message, RandomEncounter, Skill, UserProfile } from '../types'
+import type { CallKind, CallRating, MatchBreakdown, MatchMode, MeetingBoard, MeetingBoardItem, MeetingBoardSection, Message, RandomEncounter, Skill, UserProfile } from '../types'
 import { getMessagePreview } from '../utils/message'
 
 export const signInWithPassword = async (email: string, password: string) => {
@@ -95,7 +95,7 @@ export const fetchRemoteConversations = async (userId: string) => {
       const signed = await supabase.storage.from('chat-images').createSignedUrl(attachmentPath, 60 * 60)
       attachmentUrl = signed.data?.signedUrl
     }
-    return { id: String(row.id), conversationId: String(row.conversation_id), senderId: String(row.sender_id), content: String(row.content ?? ''), kind: row.message_type as Message['kind'], attachmentPath, attachmentUrl, attachmentName: row.attachment_name ? String(row.attachment_name) : undefined, createdAt: String(row.created_at), readBy: Array.isArray(row.message_reads) ? row.message_reads.map((read: { user_id: string }) => String(read.user_id)) : [] }
+    return { id: String(row.id), conversationId: String(row.conversation_id), senderId: String(row.sender_id), content: String(row.content ?? ''), kind: row.message_type as Message['kind'], attachmentPath, attachmentUrl, attachmentName: row.attachment_name ? String(row.attachment_name) : undefined, meetingBoardId: row.meeting_board_id ? String(row.meeting_board_id) : undefined, createdAt: String(row.created_at), readBy: Array.isArray(row.message_reads) ? row.message_reads.map((read: { user_id: string }) => String(read.user_id)) : [] }
   }))
   const conversations = baseConversations.map(({ members: _members, ...conversation }) => {
     const conversationMessages = messages.filter((message) => message.conversationId === conversation.id)
@@ -237,6 +237,7 @@ export const subscribeToConversation = (conversationId: string, callback: (messa
           attachmentPath,
           attachmentUrl,
           attachmentName: row.attachment_name ? String(row.attachment_name) : undefined,
+          meetingBoardId: row.meeting_board_id ? String(row.meeting_board_id) : undefined,
           createdAt: String(row.created_at),
           readBy: [],
         })
@@ -302,7 +303,7 @@ export const createDailyRoom = async (conversationId: string, kind: 'voice' | 'v
   const { data, error } = await supabase.functions.invoke('create-daily-room', { body: { conversationId, kind, callId } })
   if (error) throw new Error(await getFunctionErrorMessage(error))
   if (!data?.roomUrl || !data?.token) throw new Error(data?.error ?? 'The live call room could not be created.')
-  return data as { roomUrl: string; roomName: string; token: string }
+  return data as { roomUrl: string; roomName: string; token: string; startedAt: string; expiresAt: string }
 }
 
 export const createCallInvite = async (payload: { conversationId: string; callerId: string; recipientIds: string[]; kind: 'voice' | 'video' }) => {
@@ -391,9 +392,9 @@ export const blockRandomUser = async (userId: string, blockedUserId: string) => 
   if (error) throw error
 }
 
-export const reportRandomUser = async (userId: string, reportedUserId: string, encounterId: string, reason: string) => {
+export const reportRandomUser = async (userId: string, reportedUserId: string, encounterId: string, category: string, details: string, contextMessageIds: string[] = []) => {
   if (!supabase) throw new Error('Supabase is not configured.')
-  const { error } = await supabase.from('random_reports').insert({ reporter_id: userId, reported_id: reportedUserId, encounter_id: encounterId, reason })
+  const { error } = await supabase.from('random_reports').insert({ reporter_id: userId, reported_id: reportedUserId, encounter_id: encounterId, reason: category, category, details, status: 'pending_review', context_message_ids: contextMessageIds.slice(0, 20) })
   if (error) throw error
 }
 
@@ -402,7 +403,7 @@ export const createDailyEncounterRoom = async (encounterId: string, kind: CallKi
   const { data, error } = await supabase.functions.invoke('create-daily-room', { body: { encounterId, kind } })
   if (error) throw new Error(await getFunctionErrorMessage(error))
   if (!data?.roomUrl || !data?.token) throw new Error(data?.error ?? 'The live encounter room could not be created.')
-  return data as { roomUrl: string; roomName: string; token: string }
+  return data as { roomUrl: string; roomName: string; token: string; startedAt: string; expiresAt: string }
 }
 
 export const updateCallStatus = async (callId: string, status: 'declined' | 'ended') => {
@@ -420,5 +421,68 @@ export const submitCallRating = async (rating: CallRating) => {
     p_rating: rating.rating,
     p_feedback: rating.feedback?.trim() || null,
   })
+  if (error) throw error
+}
+
+const mapBoardItem = (row: Record<string, unknown>): MeetingBoardItem => ({
+  id: String(row.id),
+  boardId: String(row.board_id),
+  section: row.section as MeetingBoardSection,
+  content: String(row.content ?? ''),
+  position: Number(row.position ?? 0),
+  createdBy: String(row.created_by),
+  updatedBy: String(row.updated_by),
+  updatedAt: String(row.updated_at),
+})
+
+export const getOrCreateMeetingBoard = async (payload: { conversationId: string; callId?: string; encounterId?: string }) => {
+  if (!supabase) throw new Error('Supabase is not configured.')
+  const { data: boardId, error } = await supabase.rpc('get_or_create_meeting_board', { p_conversation_id: payload.conversationId, p_call_id: payload.callId ?? null, p_encounter_id: payload.encounterId ?? null })
+  if (error) throw error
+  const { data: board, error: boardError } = await supabase.from('meeting_boards').select('id, conversation_id, status').eq('id', boardId).single()
+  if (boardError) throw boardError
+  const { data: items, error: itemsError } = await supabase.from('meeting_board_items').select('*').eq('board_id', boardId).order('position').order('created_at')
+  if (itemsError) throw itemsError
+  return {
+    board: { id: String(board.id), conversationId: String(board.conversation_id), status: board.status as MeetingBoard['status'] },
+    items: (items ?? []).map((item) => mapBoardItem(item as Record<string, unknown>)),
+  }
+}
+
+export const addMeetingBoardItem = async (boardId: string, section: MeetingBoardSection, content: string, position: number, userId: string) => {
+  if (!supabase) throw new Error('Supabase is not configured.')
+  const { data, error } = await supabase.from('meeting_board_items').insert({ board_id: boardId, section, content, position, created_by: userId, updated_by: userId }).select('*').single()
+  if (error) throw error
+  return mapBoardItem(data as Record<string, unknown>)
+}
+
+export const updateMeetingBoardItem = async (itemId: string, content: string, userId: string) => {
+  if (!supabase) throw new Error('Supabase is not configured.')
+  const { data, error } = await supabase.from('meeting_board_items').update({ content, updated_by: userId }).eq('id', itemId).select('*').single()
+  if (error) throw error
+  return mapBoardItem(data as Record<string, unknown>)
+}
+
+export const deleteMeetingBoardItem = async (itemId: string) => {
+  if (!supabase) return
+  const { error } = await supabase.from('meeting_board_items').delete().eq('id', itemId)
+  if (error) throw error
+}
+
+export const subscribeToMeetingBoard = (boardId: string, onChange: () => void): RealtimeChannel | null => {
+  if (!supabase) return null
+  return supabase.channel(`meeting-board:${boardId}`).on('postgres_changes', { event: '*', schema: 'public', table: 'meeting_board_items', filter: `board_id=eq.${boardId}` }, onChange).subscribe()
+}
+
+export const fetchMeetingBoardItems = async (boardId: string) => {
+  if (!supabase) return [] as MeetingBoardItem[]
+  const { data, error } = await supabase.from('meeting_board_items').select('*').eq('board_id', boardId).order('position').order('created_at')
+  if (error) throw error
+  return (data ?? []).map((item) => mapBoardItem(item as Record<string, unknown>))
+}
+
+export const finalizeMeetingBoard = async (boardId: string) => {
+  if (!supabase) return
+  const { error } = await supabase.rpc('finalize_meeting_board', { p_board_id: boardId })
   if (error) throw error
 }

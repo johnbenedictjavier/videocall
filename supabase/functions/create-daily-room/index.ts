@@ -6,8 +6,8 @@ const corsHeaders = {
 }
 
 type RequestBody = { conversationId?: string; callId?: string; encounterId?: string; kind?: 'voice' | 'video' }
-type CallRecord = { id: string; conversation_id: string; caller_id: string; recipient_ids: string[]; kind: 'voice' | 'video'; status: string; room_name?: string | null; room_url?: string | null }
-type RandomEncounterRecord = { id: string; participant_ids: string[]; kind: 'voice' | 'video'; status: string; room_name?: string | null; room_url?: string | null }
+type CallRecord = { id: string; conversation_id: string; caller_id: string; recipient_ids: string[]; kind: 'voice' | 'video'; status: string; room_name?: string | null; room_url?: string | null; started_at?: string | null }
+type RandomEncounterRecord = { id: string; participant_ids: string[]; kind: 'voice' | 'video'; status: string; room_name?: string | null; room_url?: string | null; started_at?: string | null }
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
 
@@ -50,6 +50,7 @@ Deno.serve(async (request) => {
     let participantIds: string[] = []
     let call: CallRecord | null = null
     let encounter: RandomEncounterRecord | null = null
+    let startedAt = ''
 
     if (body.encounterId) {
       const result = await adminClient.from('random_encounters').select('*').eq('id', body.encounterId).maybeSingle() as { data: RandomEncounterRecord | null; error: { message: string } | null }
@@ -62,6 +63,7 @@ Deno.serve(async (request) => {
       if (encounter.kind !== body.kind) return json({ error: 'The encounter type does not match.' }, 400)
       roomName = typeof encounter.room_name === 'string' ? encounter.room_name : ''
       roomUrl = typeof encounter.room_url === 'string' ? encounter.room_url : ''
+      startedAt = typeof encounter.started_at === 'string' ? encounter.started_at : ''
     } else {
       const { data: member, error: memberError } = await userClient.from('conversation_members').select('conversation_id').eq('conversation_id', body.conversationId).eq('user_id', authData.user.id).maybeSingle()
       if (memberError || !member) return json({ error: 'You are not a member of this study space.' }, 403)
@@ -76,6 +78,7 @@ Deno.serve(async (request) => {
       if (call.kind !== body.kind) return json({ error: 'The call type does not match the invite.' }, 400)
       roomName = typeof call.room_name === 'string' ? call.room_name : ''
       roomUrl = typeof call.room_url === 'string' ? call.room_url : ''
+      startedAt = typeof call.started_at === 'string' ? call.started_at : ''
     }
 
     if (participantIds.length < 2 || participantIds.length > 5) return json({ error: 'A call can have between two and five participants.' }, 400)
@@ -83,10 +86,12 @@ Deno.serve(async (request) => {
     if (!roomName || !roomUrl) {
       // A deterministic name makes concurrent token requests resolve to one Daily room.
       roomName = body.encounterId ? `random-meet-${body.encounterId}` : `studymatch-${body.callId}`
+      startedAt = new Date().toISOString()
+      const expiresAtSeconds = Math.floor(new Date(startedAt).getTime() / 1000) + 60 * 60
       const roomPayload = {
         name: roomName,
         privacy: 'private',
-        properties: { exp: Math.floor(Date.now() / 1000) + 60 * 60 * 8, max_participants: 5, enable_prejoin_ui: false, enable_screenshare: true },
+        properties: { exp: expiresAtSeconds, max_participants: 5, enable_prejoin_ui: false, enable_screenshare: true, enable_recording: 'local' },
       }
       const roomResponse = await fetch('https://api.daily.co/v1/rooms', {
         method: 'POST',
@@ -115,16 +120,19 @@ Deno.serve(async (request) => {
 
       roomUrl = room.url || `https://${dailyDomain}/${roomName}`
       const roomUpdate = body.encounterId
-        ? adminClient.from('random_encounters').update({ room_name: roomName, room_url: roomUrl, status: 'active', started_at: new Date().toISOString() }).eq('id', body.encounterId)
-        : adminClient.from('calls').update({ room_name: roomName, room_url: roomUrl, status: 'active', started_at: new Date().toISOString() }).eq('id', body.callId)
+        ? adminClient.from('random_encounters').update({ room_name: roomName, room_url: roomUrl, status: 'active', started_at: startedAt }).eq('id', body.encounterId)
+        : adminClient.from('calls').update({ room_name: roomName, room_url: roomUrl, status: 'active', started_at: startedAt }).eq('id', body.callId)
       const { error: roomUpdateError } = await roomUpdate
       if (roomUpdateError) return json({ error: 'The call room could not be saved.' }, 500)
     }
 
+    const expiresAt = new Date(new Date(startedAt).getTime() + 60 * 60 * 1000)
+    if (!startedAt || Number.isNaN(expiresAt.getTime()) || expiresAt.getTime() <= Date.now()) return json({ error: 'This meeting reached its one-hour limit.' }, 409)
+
     const tokenResponse = await fetch('https://api.daily.co/v1/meeting-tokens', {
       method: 'POST',
       headers: { Authorization: `Bearer ${dailyApiKey}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ properties: { room_name: roomName, user_id: authData.user.id, user_name: authData.user.user_metadata?.full_name ?? authData.user.email, exp: Math.floor(Date.now() / 1000) + 60 * 60 * 8 } }),
+      body: JSON.stringify({ properties: { room_name: roomName, user_id: authData.user.id, user_name: authData.user.user_metadata?.full_name ?? authData.user.email, exp: Math.floor(expiresAt.getTime() / 1000), enable_recording: 'local' } }),
     })
     if (!tokenResponse.ok) return dailyFailure(tokenResponse, 'Daily could not create a meeting token.', 502)
     const token = await tokenResponse.json() as { token?: string }
@@ -135,7 +143,7 @@ Deno.serve(async (request) => {
       if (participantError) return json({ error: 'The call participant could not be recorded.' }, 500)
     }
 
-    return json({ roomUrl, roomName, token: token.token })
+    return json({ roomUrl, roomName, token: token.token, startedAt, expiresAt: expiresAt.toISOString() })
   } catch (error) {
     return json({ error: error instanceof Error ? error.message : 'Unexpected call setup error.' }, 500)
   }

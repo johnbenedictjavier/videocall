@@ -110,6 +110,7 @@ export type Message = {
   attachmentUrl?: string
   attachmentPath?: string
   attachmentName?: string
+  meetingBoardId?: string
   createdAt: string
   readBy: string[]
 }
@@ -138,6 +139,25 @@ export type CallSession = {
   callerId: string
   status: 'ringing' | 'active' | 'ended'
   createdAt: string
+}
+
+export type MeetingBoardSection = 'notes' | 'goals' | 'plans'
+
+export type MeetingBoard = {
+  id: string
+  conversationId: string
+  status: 'draft' | 'finalized'
+}
+
+export type MeetingBoardItem = {
+  id: string
+  boardId: string
+  section: MeetingBoardSection
+  content: string
+  position: number
+  createdBy: string
+  updatedBy: string
+  updatedAt: string
 }
 
 export type RandomEncounter = {
